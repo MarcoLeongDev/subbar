@@ -1,0 +1,8 @@
+# Cargo build configuration for `pre-rebrand`.
+#
+# Security posture:
+# - Use the system `git` binary for fetching dependencies instead of libgit2,
+#   reducing the surface area of the TLS / git-fetch implementation.
+
+[net]
+git-fetch-with-cli = true

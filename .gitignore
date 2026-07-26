@@ -1,0 +1,13 @@
+target/
+.DS_Store
+*.log
+.env*
+config.json
+*.pem
+*.key
+*.cert
+*.p12
+*.pfx
+src-tauri/gen/
+*.dmg
+*.app

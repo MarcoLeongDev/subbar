@@ -1,0 +1,435 @@
+var $ = function(s) { return document.getElementById(s); };
+
+var refreshSec = parseInt(localStorage.getItem('mm_refresh')) || 300;
+var markOn5h = localStorage.getItem('mm_mark_5h') !== 'off';
+var markOnWeek = localStorage.getItem('mm_mark_week') !== 'off';
+var lang = localStorage.getItem('mm_lang') || 'en';
+var theme = localStorage.getItem('mm_theme') || 'dark';
+var endpoint = localStorage.getItem('mm_endpoint') || 'com';
+var settingsOpen = false;
+// SEC-6-6: apiKey holds the plaintext only after the user explicitly reveals
+// it via the eye button. Otherwise the IPC returns a redacted form.
+var apiKey = '';
+var redactedKey = '';
+var keyRevealed = false;
+var keyInputDirty = false;
+
+function invoke(cmd, args) {
+  return window.__TAURI__.core.invoke(cmd, args);
+}
+
+var dragTargets = new WeakSet();
+document.querySelectorAll('button, input, textarea, select, .footer').forEach(function(el) { dragTargets.add(el); });
+function onDragStart(e) {
+  var t = e.target;
+  while (t && t !== this) { if (dragTargets.has(t)) return; t = t.parentElement; }
+  e.preventDefault();
+  window.__TAURI__.window.getCurrentWindow().startDragging();
+}
+$('widget').addEventListener('mousedown', onDragStart);
+$('settingsPanel').addEventListener('mousedown', onDragStart);
+
+var i18n = {
+  en: {title:'SubBar',unit:'s',aes:'Stored in OS keychain',
+       errKey:'API key needed\nclick',
+       errKeyPrefix:'API key should start with sk-\nclick',
+       pill5h:'5h',pillWeek:'Week'},
+  'zh-tw': {title:'Minimax 額度',unit:'秒',aes:'儲存於 OS 鑰匙圈',
+       errKey:'需要 API 金鑰\n點擊',
+       errKeyPrefix:'API 金鑰應以 sk- 開頭\n點擊',
+       pill5h:'5小時',pillWeek:'週'},
+  zh: {title:'Minimax 配额',unit:'秒',aes:'存储于 OS 钥匙串',
+       errKey:'需要 API 密钥\n点击',
+       errKeyPrefix:'API 密钥应以 sk- 开头\n点击',
+       pill5h:'5小时',pillWeek:'周'},
+  ja: {title:'Minimax 残量',unit:'秒',aes:'OSキーチェーンに保存',
+       errKey:'APIキーが必要です\nクリック',
+       errKeyPrefix:'APIキーは sk- で始める必要があります\nクリック',
+       pill5h:'5時間',pillWeek:'週間'},
+  es: {title:'Minimax cuota',unit:'s',aes:'Almacenado en llavero del SO',
+       errKey:'Se necesita clave API\nhaga clic en',
+       errKeyPrefix:'La clave API debe comenzar con sk-\nhaga clic en',
+       pill5h:'5h',pillWeek:'Semana'}
+};
+function t(k) { return (i18n[lang] || i18n.en)[k] || k; }
+function applyLang() {
+  document.querySelectorAll('[data-i18n]').forEach(function(el) {
+    el.textContent = t(el.dataset.i18n);
+  });
+}
+
+function showErrorMsg(container, msg) {
+  container.textContent = '';
+  var d = document.createElement('div');
+  d.className = 'error';
+  var lines = msg.split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    if (i > 0) d.appendChild(document.createElement('br'));
+    d.appendChild(document.createTextNode(lines[i]));
+  }
+  container.appendChild(d);
+}
+
+function validateApiKeyPrefix(key) {
+  if (!key) return true; // Empty key is handled elsewhere (clears the key)
+  if (!key.startsWith('sk-')) {
+    showErrorMsg($('content'), t('errKeyPrefix'));
+    updateKeyState();
+    return false;
+  }
+  return true;
+}
+
+function applyTheme() {
+  var w = $('widget');
+  w.classList.remove('theme-dark','theme-light');
+  w.classList.add('theme-' + theme);
+  document.querySelectorAll('#segThemeHeader .seg-btn').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.val === theme);
+  });
+}
+
+function getTicks(pillCls) {
+  var show = pillCls === '5h' ? markOn5h : markOnWeek;
+  return show ? [25, 50, 75] : [];
+}
+
+function createPill(cls, label, sublabel, pct, ticks) {
+  var pill = document.createElement('div');
+  pill.className = 'pill pill-' + cls;
+  pill.dataset.pill = cls;
+
+  var fill = document.createElement('div');
+  fill.className = 'pill-fill';
+  fill.style.width = pct + '%';
+  pill.appendChild(fill);
+
+  if (ticks.length) {
+    var ticksDiv = document.createElement('div');
+    ticksDiv.className = 'pill-ticks';
+    for (var i = 0; i < ticks.length; i++) {
+      var tick = document.createElement('div');
+      tick.className = 'tick';
+      tick.style.left = ticks[i] + '%';
+      ticksDiv.appendChild(tick);
+    }
+    pill.appendChild(ticksDiv);
+  }
+
+  var labelSpan = document.createElement('span');
+  labelSpan.className = 'pill-label';
+  labelSpan.textContent = label;
+  if (sublabel) {
+    var subSpan = document.createElement('span');
+    subSpan.className = 'pill-sublabel';
+    subSpan.textContent = sublabel;
+    labelSpan.appendChild(subSpan);
+  }
+  pill.appendChild(labelSpan);
+
+  var valueSpan = document.createElement('span');
+  valueSpan.className = 'pill-value';
+  valueSpan.textContent = pct;
+  var subPct = document.createElement('span');
+  subPct.className = 'pill-sub';
+  subPct.textContent = '%';
+  valueSpan.appendChild(subPct);
+  pill.appendChild(valueSpan);
+
+  return pill;
+}
+
+function togglePillMarker(pillCls) {
+  if (pillCls === '5h') {
+    markOn5h = !markOn5h;
+    localStorage.setItem('mm_mark_5h', markOn5h ? 'on' : 'off');
+  } else if (pillCls === 'week') {
+    markOnWeek = !markOnWeek;
+    localStorage.setItem('mm_mark_week', markOnWeek ? 'on' : 'off');
+  }
+  var ticks = document.querySelector('.pill-' + pillCls + ' .pill-ticks');
+  if (ticks) {
+    ticks.style.display = (pillCls === '5h' ? markOn5h : markOnWeek) ? '' : 'none';
+  }
+}
+
+function timestampLabel(ms) {
+  var d = new Date(ms);
+  return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',hour12:false});
+}
+
+function toggleSettings() {
+  settingsOpen = !settingsOpen;
+  $('settingsPanel').classList.toggle('show', settingsOpen);
+  $('moreBtn').classList.toggle('settings-open', settingsOpen);
+  $('moreBtn').style.display = settingsOpen ? 'none' : '';
+  if (settingsOpen) {
+    refreshKeyDisplay();
+    $('refreshSlider').value = refreshSec;
+    $('rangeVal').textContent = refreshSec;
+    document.querySelectorAll('#segLang .seg-btn').forEach(function(b) {
+      b.classList.toggle('active', b.dataset.val === lang);
+    });
+    document.querySelectorAll('#segEndpoint .seg-btn').forEach(function(b) {
+      b.classList.toggle('active', b.dataset.val === endpoint);
+    });
+    applyTheme();
+    fetchUsage(); // Fetch immediately when settings opens
+  }
+}
+
+async function refreshKeyDisplay() {
+  // SEC-6-6: default fetch returns redacted form; only the eye toggle fetches plaintext.
+  redactedKey = await invoke('get_api_key', { reveal: false });
+  $('apiKeyInput').placeholder = redactedKey || 'sk-cp-...';
+  apiKey = '';
+  keyRevealed = false;
+  keyInputDirty = false;
+  $('apiKeyInput').value = '';
+  updateKeyState();
+}
+
+async function toggleKeyReveal() {
+  if (keyRevealed) {
+    apiKey = '';
+    $('apiKeyInput').value = '';
+    keyRevealed = false;
+    keyInputDirty = false;
+  } else {
+    apiKey = await invoke('get_api_key', { reveal: true });
+    $('apiKeyInput').value = apiKey;
+    keyRevealed = true;
+    keyInputDirty = false;
+  }
+  updateKeyState();
+}
+
+async function switchEndpoint(ep) {
+  if (ep === endpoint) return;
+  // SEC-6-6: only save the pending key if the user actually edited or
+  // explicitly revealed + accepted it. Otherwise leave the previous key
+  // untouched when switching endpoints.
+  if (keyInputDirty || keyRevealed) {
+    var pendingKey = $('apiKeyInput').value.trim();
+    if (!validateApiKeyPrefix(pendingKey)) return;
+    await invoke('set_api_key', { key: pendingKey, endpoint: endpoint });
+  }
+  endpoint = ep;
+  localStorage.setItem('mm_endpoint', endpoint);
+  await refreshKeyDisplay();
+  $('content').textContent = '';
+  restartTimer();
+  fetchUsage();
+}
+
+async function applySettings() {
+  var newKey = null;
+  if (keyInputDirty) {
+    newKey = $('apiKeyInput').value.trim();
+    if (!validateApiKeyPrefix(newKey)) return;
+  } else if (keyRevealed) {
+    newKey = apiKey;
+    if (!validateApiKeyPrefix(newKey)) return;
+  }
+  // else: no change to key — skip set_api_key entirely.
+
+  var newRefresh = parseInt($('refreshSlider').value) || 300;
+  var newLang = document.querySelector('#segLang .seg-btn.active').dataset.val;
+  var newTheme = document.querySelector('#segThemeHeader .seg-btn.active').dataset.val;
+
+  var langChanged = lang !== newLang;
+  var themeChanged = theme !== newTheme;
+  var keyChanged = newKey !== null && newKey !== redactedKey && newKey !== apiKey;
+  var refreshChanged = newRefresh !== refreshSec;
+
+  if (newKey !== null) {
+    apiKey = newKey;
+    redactedKey = newKey.length > 8 ? (newKey.slice(0, 4) + '...' + newKey.slice(-4)) : '[REDACTED]';
+    $('apiKeyInput').placeholder = redactedKey || 'sk-cp-...';
+    await invoke('set_api_key', { key: apiKey, endpoint: endpoint });
+    keyInputDirty = false;
+    keyRevealed = false;
+  }
+  refreshSec = newRefresh;
+  theme = newTheme;
+
+  await invoke('set_refresh_interval', { interval: refreshSec });
+  localStorage.setItem('mm_endpoint', endpoint);
+  localStorage.setItem('mm_refresh', refreshSec);
+  localStorage.setItem('mm_lang', newLang);
+  localStorage.setItem('mm_theme', theme);
+  lang = newLang;
+  applyLang();
+  applyTheme();
+
+  if (langChanged || themeChanged) $('content').textContent = '';
+  if (keyChanged || refreshChanged) restartTimer();
+  fetchUsage();
+}
+
+async function clearKey() {
+  $('apiKeyInput').value = '';
+  keyInputDirty = true; // explicit clear intent: applySettings should write empty
+  updateKeyState();
+  await applySettings();
+  $('apiKeyInput').focus();
+}
+
+$('moreBtn').onclick = toggleSettings;
+$('settingsClose').onclick = function() { if (settingsOpen) toggleSettings(); };
+$('powerBtn').onclick = function() { invoke('quit_app'); };
+$('keyClearBtn').onclick = clearKey;
+$('keyEyeBtn').onclick = toggleKeyReveal;
+$('keyCheckBtn').onclick = function() { applySettings(); };
+$('apiKeyInput').oninput = function() {
+  keyInputDirty = true;
+  keyRevealed = false;
+  updateKeyState();
+};
+$('apiKeyInput').onchange = function() { if (keyInputDirty) applySettings(); };
+$('refreshSlider').oninput = function() { $('rangeVal').textContent = this.value; };
+$('refreshSlider').onchange = function() { applySettings(); };
+$('refreshIcon').onclick = function() { fetchUsage(); };
+
+function updateKeyState() {
+  // SEC-6-6: visual indicators depend on whether the plaintext key is in
+  // memory (revealed) and whether the input has been edited.
+  var hasPlaintextInMemory = !!apiKey;
+  var hasStoredKey = !!redactedKey;
+  var hasText = $('apiKeyInput').value.length > 0;
+  $('keyShieldBtn').style.display = hasStoredKey ? 'flex' : 'none';
+  $('keyEyeBtn').style.display = hasStoredKey ? 'flex' : 'none';
+  $('keyEyeBtn').title = keyRevealed ? 'Hide key' : 'Show key';
+  $('keyCheckBtn').style.display = (!hasStoredKey && hasText) ? 'flex' : 'none';
+  $('keyClearBtn').style.display = hasStoredKey ? 'flex' : 'none';
+  $('apiKeyInput').style.paddingLeft = hasStoredKey ? '40px' : '10px';
+  $('apiKeyInput').style.paddingRight = (hasStoredKey || hasText) ? '40px' : '10px';
+}
+
+document.querySelectorAll('#segThemeHeader .seg-btn, #segLang .seg-btn').forEach(function(b) {
+  b.onclick = function() {
+    var parent = this.parentElement;
+    parent.querySelectorAll('.seg-btn').forEach(function(x) { x.classList.remove('active'); });
+    this.classList.add('active');
+    applySettings();
+  };
+});
+
+document.querySelectorAll('#segEndpoint .seg-btn').forEach(function(b) {
+  b.onclick = function() {
+    document.querySelectorAll('#segEndpoint .seg-btn').forEach(function(x) { x.classList.remove('active'); });
+    this.classList.add('active');
+    switchEndpoint(this.dataset.val);
+  };
+});
+
+document.addEventListener('click', function(e) {
+  if (settingsOpen && !$('settingsPanel').contains(e.target) && e.target !== $('moreBtn') && !$('moreBtn').contains(e.target) && e.target !== $('settingsClose') && !$('settingsClose').contains(e.target)) toggleSettings();
+});
+
+// JS timer disabled: hidden WebView throttling makes it unreliable.
+// All periodic fetching is handled by the Rust background timer.
+function restartTimer() {}
+
+async function fetchUsage() {
+  var c = $('content');
+
+  // SEC-6-6: any key set on the backend (redacted or plaintext) counts as
+  // "has key" — the actual API call goes through Rust which has the plaintext.
+  if (!redactedKey) {
+    showErrorMsg(c, t('errKey'));
+    updateKeyState();
+    $('refreshIcon').style.display = 'none';
+    $('refreshTime').textContent = '';
+    return;
+  }
+
+  var hasPills = c.querySelector('.pill') !== null;
+  if (!hasPills) {
+    c.textContent = '';
+    var sp = document.createElement('div');
+    sp.className = 'spinner';
+    c.appendChild(sp);
+  }
+  $('refreshIcon').style.display = 'none';
+  $('refreshSpinner').style.display = 'inline-block';
+
+  try {
+    var data = await invoke('fetch_quota');
+
+    if (data.base_resp && data.base_resp.status_code !== 0) {
+      throw new Error(data.base_resp.status_msg || 'API error');
+    }
+    var m = (data.model_remains || []).find(function(x) { return x.model_name === 'general'; });
+    if (!m) throw new Error('No general model data');
+
+    var intervalPct = Math.round(100 - (m.current_interval_remaining_percent || 100));
+    var weeklyPct = Math.round(100 - (m.current_weekly_remaining_percent || 100));
+    var startH = timestampLabel(m.start_time);
+    var endH = timestampLabel(m.end_time);
+
+    if (hasPills) {
+      var fills = c.querySelectorAll('.pill-fill');
+      fills[0].style.width = intervalPct + '%';
+      fills[1].style.width = weeklyPct + '%';
+      var vals = c.querySelectorAll('.pill-value');
+      vals[0].childNodes[0].textContent = intervalPct;
+      vals[1].childNodes[0].textContent = weeklyPct;
+      var sub = c.querySelector('.pill-sublabel');
+      if (sub) sub.textContent = startH + '~' + endH;
+    } else {
+      c.textContent = '';
+      c.appendChild(createPill('5h', t('pill5h'), startH + '~' + endH, intervalPct, getTicks('5h')));
+      c.appendChild(createPill('week', t('pillWeek'), '', weeklyPct, getTicks('week')));
+      c.querySelectorAll('.pill').forEach(function(pill) {
+        pill.addEventListener('click', function() {
+          togglePillMarker(pill.dataset.pill);
+          fetchUsage();
+        });
+      });
+    }
+
+    $('refreshSpinner').style.display = 'none';
+    $('refreshIcon').style.display = 'inline';
+    updateKeyState();
+    var now = new Date();
+    $('refreshTime').textContent = now.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+  } catch(e) {
+    $('refreshSpinner').style.display = 'none';
+    $('refreshIcon').style.display = 'inline';
+    $('refreshTime').textContent = '';
+    if (!hasPills) {
+      var errDiv = document.createElement('div');
+      errDiv.className = 'error';
+      errDiv.textContent = (e && e.message) ? e.message : String(e);
+      c.textContent = '';
+      c.appendChild(errDiv);
+    }
+  }
+}
+
+async function init() {
+  // SEC-6-6: fetch redacted form only; plaintext never enters the webview
+  // until the user clicks the eye to reveal it.
+  redactedKey = await invoke('get_api_key', { reveal: false });
+  apiKey = '';
+  keyRevealed = false;
+  keyInputDirty = false;
+  $('apiKeyInput').placeholder = redactedKey || 'sk-cp-...';
+  applyLang();
+  applyTheme();
+  var tip = $('keyShieldTip');
+  if (tip) tip.textContent = t('aes');
+  fetchUsage();
+
+  // Fetch immediately when window becomes visible (tray click, focus, etc.)
+  document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) fetchUsage();
+  });
+  window.addEventListener('focus', function() {
+    fetchUsage();
+  });
+
+  try { $('appVersion').textContent = 'v' + await invoke('get_app_version'); } catch(_) {}
+}
+init();

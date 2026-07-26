@@ -1,0 +1,8 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for the app (least-privilege; webview uses only invoke + startDragging)",
+  "windows": ["main"],
+  "permissions": [
+    "core:window:allow-start-dragging"
+  ]
+}

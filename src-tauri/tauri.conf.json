@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SubBar",
+  "version": "1.0.0",
+  "identifier": "com.minimax.subbar",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "macOSPrivateApi": true,
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; plugin-src 'none'; form-action 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: asset:; font-src 'self' data:; connect-src 'self' ipc:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": [
+      "icons/logo-16.png",
+      "icons/logo-32.png",
+      "icons/logo-64.png",
+      "icons/logo-128.png",
+      "icons/logo-256.png",
+      "icons/logo-512.png"
+    ],
+    "targets": ["app", "dmg"],
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "infoPlist": "./Info.plist",
+      "entitlements": "./entitlements.plist",
+      "hardenedRuntime": true
+    }
+  }
+}
