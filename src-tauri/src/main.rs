@@ -12,6 +12,9 @@ use tokio::time;
 
 const API_URL_COM: &str = "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains";
 const API_URL_IO: &str = "https://api.minimax.io/v1/api/openplatform/coding_plan/remains";
+// KEYRING_SERVICE is intentionally kept as "pre-rebrand" for backward
+// compatibility: existing API keys stored in the OS keychain under that
+// service survive the SubBar rebrand.
 const KEYRING_SERVICE: &str = "pre-rebrand";
 const KEYRING_USER_COM: &str = "api_key_com";
 const KEYRING_USER_IO: &str = "api_key_io";
@@ -231,7 +234,7 @@ fn set_endpoint(ep: String, app: tauri::AppHandle, state: tauri::State<AppState>
     // Persist so the backend starts on the correct endpoint next launch and
     // never flashes the wrong data source (e.g. AUTH! from a stale Minimax key).
     if let Ok(data_dir) = app.path().app_local_data_dir() {
-        save_persisted_endpoint(&data_dir.join("pre-rebrand"), &ep);
+        save_persisted_endpoint(&data_dir.join("subbar"), &ep);
     }
     log::debug!("set_endpoint: synced");
 }
@@ -575,8 +578,8 @@ fn main() {
             let app_data_dir = app
                 .path()
                 .app_local_data_dir()
-                .map(|d| d.join("pre-rebrand"))
-                .unwrap_or_else(|_| PathBuf::from("pre-rebrand"));
+                .map(|d| d.join("subbar"))
+                .unwrap_or_else(|_| PathBuf::from("subbar"));
             migrate_config_json_if_needed(&app_data_dir);
 
             // Load keys from keychain

@@ -1,4 +1,4 @@
-# Cargo build configuration for `pre-rebrand`.
+# Cargo build configuration for `subbar`.
 #
 # Security posture:
 # - Use the system `git` binary for fetching dependencies instead of libgit2,

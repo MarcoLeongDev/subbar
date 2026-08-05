@@ -1,8 +1,9 @@
-# SubBar Menubar
+# SubBar (Subscription Bar)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A macOS menu bar app that monitors your Minimax API quota usage at a glance.
+A macOS menu bar app that monitors your API subscription / quota usage at a
+glance — across Minimax (`.com` / `.io`) and OpenCode Go.
 
 Shows the 5h interval quota percentage directly in the menu bar tray. Click to reveal a widget panel with detailed usage bars and settings.
 
