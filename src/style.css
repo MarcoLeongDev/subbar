@@ -202,7 +202,11 @@ input[type="range"]::-webkit-slider-thumb{
 #segThemeHeader .seg-btn svg{width:12px;height:12px}
 #segLang .seg-btn{height:20px;font-size:10px;padding:0 8px}
 #segEndpoint .seg-btn{height:20px;font-size:10px;padding:0 8px;display:inline-flex;align-items:center;gap:3px}
-#segEndpoint .seg-icon{width:10px;height:10px;flex-shrink:0}
+/* Theme-tinted icons: the vendored SVG is used as a CSS mask so the glyph is
+   filled with `currentColor`, inheriting the button's theme-aware color. */
+#segEndpoint .seg-icon{width:10px;height:10px;flex-shrink:0;background-color:currentColor;-webkit-mask-repeat:no-repeat;-webkit-mask-position:center;-webkit-mask-size:contain;mask-repeat:no-repeat;mask-position:center;mask-size:contain}
+#segEndpoint .seg-icon.icon-minimax{-webkit-mask-image:url(icons/minimax.svg);mask-image:url(icons/minimax.svg)}
+#segEndpoint .seg-icon.icon-opencode{-webkit-mask-image:url(icons/opencode.svg);mask-image:url(icons/opencode.svg)}
 .settings-close{
   width:26px;height:26px;border-radius:50%;border:none;background:transparent;
   color:var(--text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:13px;
