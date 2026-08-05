@@ -16,6 +16,11 @@ const KEYRING_SERVICE: &str = "pre-rebrand";
 const KEYRING_USER_COM: &str = "api_key_com";
 const KEYRING_USER_IO: &str = "api_key_io";
 
+// OCG reads usage from the `agent-limits` CLI and has no in-app API key. When
+// the CLI cannot authenticate / has no usable credentials, the tray title
+// shows this clear status instead of a raw error marker.
+const OCG_NO_AUTH_TITLE: &str = "unauth";
+
 // SEC-6-18: widget dimensions — single source of truth shared with
 // `src/style.css` (`.widget` rule). The CSS defines an inner content area of
 // 191×191 logical px; the liquid-glass `corner_radius: 24.0` adds padding so
@@ -401,14 +406,14 @@ async fn fetch_ocg_and_update(app: &tauri::AppHandle) -> Result<serde_json::Valu
     let v = match fetch_ocg_quota_from_cli().await {
         Ok(d) => d,
         Err(e) => {
-            render_title(app, "OCG?");
+            render_title(app, OCG_NO_AUTH_TITLE);
             return Err(e);
         }
     };
     let bars = match parse_ocg_bars(&v) {
         Ok(b) => b,
         Err(e) => {
-            render_title(app, "OCG?");
+            render_title(app, OCG_NO_AUTH_TITLE);
             return Err(e);
         }
     };
@@ -434,8 +439,13 @@ async fn fetch_ocg_and_update(app: &tauri::AppHandle) -> Result<serde_json::Valu
         *s.last_used_week.lock().unwrap_or_else(|e| e.into_inner()) = uw;
         *s.last_used_month.lock().unwrap_or_else(|e| e.into_inner()) = um;
     }
-    render_title(app, &format!("{}% {}% {}%", u5, uw, um));
+    // Success: show the three ocg limits (5h / week / month used percentages).
+    render_title(app, &format_ocg_title(u5, uw, um));
     Ok(serde_json::json!({ "bars": bars }))
+}
+
+fn format_ocg_title(u5: u32, uw: u32, um: u32) -> String {
+    format!("{}% {}% {}%", u5, uw, um)
 }
 
 fn apply_liquid_glass(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
@@ -691,4 +701,22 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ocg_title_formats_three_limits() {
+        assert_eq!(format_ocg_title(0, 0, 0), "0% 0% 0%");
+        assert_eq!(format_ocg_title(12, 34, 56), "12% 34% 56%");
+        assert_eq!(format_ocg_title(100, 100, 100), "100% 100% 100%");
+    }
+
+    #[test]
+    fn ocg_no_auth_title_is_clear_status() {
+        // The tray must show a clear no-key / unauth status, not a raw error.
+        assert_eq!(OCG_NO_AUTH_TITLE, "unauth");
+    }
 }
