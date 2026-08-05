@@ -241,6 +241,17 @@ input[type="range"]::-webkit-slider-thumb{
 .pill-5h .pill-fill{background:var(--pill-fill-5h)}
 .pill-week .pill-fill{background:var(--pill-fill-week)}
 
+/* OCG endpoint shows 3 bars (5h / week / month) in the same body area, so
+   pills are shrunk to keep all three inside the fixed widget height. */
+.endpoint-ocg .pill{height:23px;margin-bottom:4px;border-radius:12px}
+.endpoint-ocg .pill:last-child{margin-bottom:0}
+.endpoint-ocg .pill-fill{border-radius:12px}
+.endpoint-ocg .pill-label,.endpoint-ocg .pill-value{font-size:11px;padding:0 10px}
+.endpoint-ocg .pill-sublabel{font-size:9px;margin-left:3px}
+
+.ocg-hint-row{color:var(--text-secondary)}
+.ocg-hint-text{font-size:10px;font-weight:500;letter-spacing:0.3px}
+
 .pill-ticks{position:absolute;left:0;top:0;right:0;bottom:0;z-index:1;pointer-events:none}
 .tick{position:absolute;bottom:0;width:1px;height:5px;background:var(--tick)}
 

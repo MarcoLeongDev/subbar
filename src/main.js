@@ -3,6 +3,7 @@ var $ = function(s) { return document.getElementById(s); };
 var refreshSec = parseInt(localStorage.getItem('mm_refresh')) || 300;
 var markOn5h = localStorage.getItem('mm_mark_5h') !== 'off';
 var markOnWeek = localStorage.getItem('mm_mark_week') !== 'off';
+var markOnMonth = localStorage.getItem('mm_mark_month') !== 'off';
 var lang = localStorage.getItem('mm_lang') || 'en';
 var theme = localStorage.getItem('mm_theme') || 'dark';
 var endpoint = localStorage.getItem('mm_endpoint') || 'com';
@@ -33,23 +34,23 @@ var i18n = {
   en: {title:'SubBar',unit:'s',aes:'Stored in OS keychain',
        errKey:'API key needed\nclick',
        errKeyPrefix:'API key should start with sk-\nclick',
-       pill5h:'5h',pillWeek:'Week'},
+       pill5h:'5h',pillWeek:'Week',pillMonth:'Month',ocgHint:'Data from agent-limits CLI'},
   'zh-tw': {title:'Minimax 額度',unit:'秒',aes:'儲存於 OS 鑰匙圈',
        errKey:'需要 API 金鑰\n點擊',
        errKeyPrefix:'API 金鑰應以 sk- 開頭\n點擊',
-       pill5h:'5小時',pillWeek:'週'},
+       pill5h:'5小時',pillWeek:'週',pillMonth:'月',ocgHint:'資料來自 agent-limits CLI'},
   zh: {title:'Minimax 配额',unit:'秒',aes:'存储于 OS 钥匙串',
        errKey:'需要 API 密钥\n点击',
        errKeyPrefix:'API 密钥应以 sk- 开头\n点击',
-       pill5h:'5小时',pillWeek:'周'},
+       pill5h:'5小时',pillWeek:'周',pillMonth:'月',ocgHint:'数据来自 agent-limits CLI'},
   ja: {title:'Minimax 残量',unit:'秒',aes:'OSキーチェーンに保存',
        errKey:'APIキーが必要です\nクリック',
        errKeyPrefix:'APIキーは sk- で始める必要があります\nクリック',
-       pill5h:'5時間',pillWeek:'週間'},
+       pill5h:'5時間',pillWeek:'週間',pillMonth:'月',ocgHint:'agent-limits CLI のデータ'},
   es: {title:'Minimax cuota',unit:'s',aes:'Almacenado en llavero del SO',
        errKey:'Se necesita clave API\nhaga clic en',
        errKeyPrefix:'La clave API debe comenzar con sk-\nhaga clic en',
-       pill5h:'5h',pillWeek:'Semana'}
+       pill5h:'5h',pillWeek:'Semana',pillMonth:'Mes',ocgHint:'Datos del CLI agent-limits'}
 };
 function t(k) { return (i18n[lang] || i18n.en)[k] || k; }
 function applyLang() {
@@ -90,7 +91,11 @@ function applyTheme() {
 }
 
 function getTicks(pillCls) {
-  var show = pillCls === '5h' ? markOn5h : markOnWeek;
+  var show;
+  if (pillCls === '5h') show = markOn5h;
+  else if (pillCls === 'week') show = markOnWeek;
+  else if (pillCls === 'month') show = markOnMonth;
+  else show = false;
   return show ? [25, 50, 75] : [];
 }
 
@@ -140,16 +145,23 @@ function createPill(cls, label, sublabel, pct, ticks) {
 }
 
 function togglePillMarker(pillCls) {
+  var on;
   if (pillCls === '5h') {
     markOn5h = !markOn5h;
     localStorage.setItem('mm_mark_5h', markOn5h ? 'on' : 'off');
+    on = markOn5h;
   } else if (pillCls === 'week') {
     markOnWeek = !markOnWeek;
     localStorage.setItem('mm_mark_week', markOnWeek ? 'on' : 'off');
+    on = markOnWeek;
+  } else if (pillCls === 'month') {
+    markOnMonth = !markOnMonth;
+    localStorage.setItem('mm_mark_month', markOnMonth ? 'on' : 'off');
+    on = markOnMonth;
   }
   var ticks = document.querySelector('.pill-' + pillCls + ' .pill-ticks');
   if (ticks) {
-    ticks.style.display = (pillCls === '5h' ? markOn5h : markOnWeek) ? '' : 'none';
+    ticks.style.display = on ? '' : 'none';
   }
 }
 
@@ -216,6 +228,7 @@ async function switchEndpoint(ep) {
   }
   endpoint = ep;
   localStorage.setItem('mm_endpoint', endpoint);
+  applyEndpointChrome();
   await refreshKeyDisplay();
   $('content').textContent = '';
   restartTimer();
@@ -332,6 +345,12 @@ document.addEventListener('click', function(e) {
 function restartTimer() {}
 
 async function fetchUsage() {
+  // OCG endpoint reads OpenCode Go usage from the `agent-limits` CLI and has
+  // no API key — bypass the key check and render 3 bars (5h / week / month).
+  if (endpoint === 'ocg') {
+    return fetchEndpointUsage('fetch_ocg_quota', buildOcgBars);
+  }
+
   var c = $('content');
 
   // SEC-6-6: any key set on the backend (redacted or plaintext) counts as
@@ -344,6 +363,11 @@ async function fetchUsage() {
     return;
   }
 
+  return fetchEndpointUsage('fetch_quota', buildMinimaxBars);
+}
+
+async function fetchEndpointUsage(cmd, builder) {
+  var c = $('content');
   var hasPills = c.querySelector('.pill') !== null;
   if (!hasPills) {
     c.textContent = '';
@@ -355,39 +379,9 @@ async function fetchUsage() {
   $('refreshSpinner').style.display = 'inline-block';
 
   try {
-    var data = await invoke('fetch_quota');
-
-    if (data.base_resp && data.base_resp.status_code !== 0) {
-      throw new Error(data.base_resp.status_msg || 'API error');
-    }
-    var m = (data.model_remains || []).find(function(x) { return x.model_name === 'general'; });
-    if (!m) throw new Error('No general model data');
-
-    var intervalPct = Math.round(100 - (m.current_interval_remaining_percent || 100));
-    var weeklyPct = Math.round(100 - (m.current_weekly_remaining_percent || 100));
-    var startH = timestampLabel(m.start_time);
-    var endH = timestampLabel(m.end_time);
-
-    if (hasPills) {
-      var fills = c.querySelectorAll('.pill-fill');
-      fills[0].style.width = intervalPct + '%';
-      fills[1].style.width = weeklyPct + '%';
-      var vals = c.querySelectorAll('.pill-value');
-      vals[0].childNodes[0].textContent = intervalPct;
-      vals[1].childNodes[0].textContent = weeklyPct;
-      var sub = c.querySelector('.pill-sublabel');
-      if (sub) sub.textContent = startH + '~' + endH;
-    } else {
-      c.textContent = '';
-      c.appendChild(createPill('5h', t('pill5h'), startH + '~' + endH, intervalPct, getTicks('5h')));
-      c.appendChild(createPill('week', t('pillWeek'), '', weeklyPct, getTicks('week')));
-      c.querySelectorAll('.pill').forEach(function(pill) {
-        pill.addEventListener('click', function() {
-          togglePillMarker(pill.dataset.pill);
-          fetchUsage();
-        });
-      });
-    }
+    var data = await invoke(cmd);
+    var bars = builder(data);
+    renderBars(c, bars, hasPills);
 
     $('refreshSpinner').style.display = 'none';
     $('refreshIcon').style.display = 'inline';
@@ -408,6 +402,78 @@ async function fetchUsage() {
   }
 }
 
+function buildMinimaxBars(data) {
+  if (data.base_resp && data.base_resp.status_code !== 0) {
+    throw new Error(data.base_resp.status_msg || 'API error');
+  }
+  var m = (data.model_remains || []).find(function(x) { return x.model_name === 'general'; });
+  if (!m) throw new Error('No general model data');
+
+  var intervalPct = Math.round(100 - (m.current_interval_remaining_percent || 100));
+  var weeklyPct = Math.round(100 - (m.current_weekly_remaining_percent || 100));
+  var startH = timestampLabel(m.start_time);
+  var endH = timestampLabel(m.end_time);
+
+  return [
+    { id:'5h', labelKey:'pill5h', sublabel: startH + '~' + endH, pct: intervalPct, ticks: getTicks('5h') },
+    { id:'week', labelKey:'pillWeek', sublabel: '', pct: weeklyPct, ticks: getTicks('week') }
+  ];
+}
+
+function labelKeyForOcg(id) {
+  if (id === '5h') return 'pill5h';
+  if (id === 'week') return 'pillWeek';
+  return 'pillMonth';
+}
+
+function buildOcgBars(data) {
+  var bars = data.bars || [];
+  return bars.map(function(b) {
+    return {
+      id: b.id,
+      labelKey: labelKeyForOcg(b.id),
+      sublabel: b.reset_at ? timestampLabel(Date.parse(b.reset_at)) : '',
+      pct: Math.round(b.used_percent || 0),
+      ticks: getTicks(b.id)
+    };
+  });
+}
+
+function renderBars(c, bars, hasPills) {
+  if (hasPills) {
+    var pills = c.querySelectorAll('.pill');
+    for (var i = 0; i < pills.length; i++) {
+      var bar = bars[i];
+      if (!bar) continue;
+      var fill = pills[i].querySelector('.pill-fill');
+      if (fill) fill.style.width = bar.pct + '%';
+      var val = pills[i].querySelector('.pill-value');
+      if (val && val.childNodes[0]) val.childNodes[0].textContent = bar.pct;
+      var sub = pills[i].querySelector('.pill-sublabel');
+      if (sub) sub.textContent = bar.sublabel;
+    }
+  } else {
+    c.textContent = '';
+    bars.forEach(function(b) {
+      c.appendChild(createPill(b.id, t(b.labelKey), b.sublabel, b.pct, b.ticks));
+    });
+    c.querySelectorAll('.pill').forEach(function(pill) {
+      pill.addEventListener('click', function() {
+        togglePillMarker(pill.dataset.pill);
+        fetchUsage();
+      });
+    });
+  }
+}
+
+function applyEndpointChrome() {
+  var w = $('widget');
+  w.classList.toggle('endpoint-ocg', endpoint === 'ocg');
+  var keyRow = $('apiKeyInput').closest('.setting-row');
+  if (keyRow) keyRow.style.display = endpoint === 'ocg' ? 'none' : '';
+  $('ocgHintRow').style.display = endpoint === 'ocg' ? 'flex' : 'none';
+}
+
 async function init() {
   // SEC-6-6: fetch redacted form only; plaintext never enters the webview
   // until the user clicks the eye to reveal it.
@@ -418,6 +484,7 @@ async function init() {
   $('apiKeyInput').placeholder = redactedKey || 'sk-cp-...';
   applyLang();
   applyTheme();
+  applyEndpointChrome();
   var tip = $('keyShieldTip');
   if (tip) tip.textContent = t('aes');
   fetchUsage();

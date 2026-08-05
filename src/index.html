@@ -34,6 +34,7 @@
       <div class="segmented" id="segEndpoint">
         <button class="seg-btn active" data-val="com" data-tauri-drag-region="false">.com</button>
         <button class="seg-btn" data-val="io" data-tauri-drag-region="false">.io</button>
+        <button class="seg-btn" data-val="ocg" data-tauri-drag-region="false">ocg</button>
       </div>
     </div>
     <div class="setting-row">
@@ -44,8 +45,12 @@
         <button class="key-eye" id="keyEyeBtn" data-tauri-drag-region="false" title="Show key"><svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8M1.173 8a13 13 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13 13 0 0 1 14.828 8q-.086.13-.195.288c-.335.48-.82 1.12-1.46 1.756C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13 13 0 0 1 1.172 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5M5.5 8a2.5 2.5 0 1 1 5 0 2.5 2.5 0 0 1-5 0"/></svg></button>
         <button class="key-check" id="keyCheckBtn" data-tauri-drag-region="false"><svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" fill="currentColor" viewBox="0 0 16 16"><path d="M12.736 3.97a.733.733 0 0 1 1.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 0 1-1.065.02L3.217 8.384a.757.757 0 0 1 0-1.06.733.733 0 0 1 1.047 0l3.052 3.093 5.4-6.425z"/></svg></button>
         <button class="key-clear" id="keyClearBtn" title="Clear" data-tauri-drag-region="false"><svg xmlns="http://www.w3.org/2000/svg" width="9" height="9" fill="currentColor" viewBox="0 0 16 16"><path d="M2.146 2.854a.5.5 0 1 1 .708-.708L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8z"/></svg></button>
+        </div>
       </div>
-    </div>
+      <div class="setting-row ocg-hint-row" id="ocgHintRow" style="display:none">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="var(--text-secondary)" class="icon-shrink" viewBox="0 0 16 16"><path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16m.93-9.412-1 4.705c-.07.34-.437.748-1.101.748-.532 0-.93-.24-1.118-.715-.146-.476.064-.834.904-1.076l1.097-.43c1.69-.654 2.366-1.62 2.282-2.77C11.428 3.928 9.84 3 8.09 3c-1.93 0-3.395.89-3.79 2.907-.083.5.203.897.728.897.43 0 .64-.282.756-.602.29-.862 1.062-1.406 2.19-1.406.953 0 1.738.52 1.82 1.39.035.39-.05.953-.638 1.415"/></svg>
+        <span class="ocg-hint-text" data-i18n="ocgHint">Data from agent-limits CLI</span>
+      </div>
 <div class="setting-row refresh-row">
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="var(--text-secondary)" class="icon-shrink" viewBox="0 0 16 16"><path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41m-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9"/><path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5 5 0 0 0 8 3M3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9z"/></svg>
       <input type="range" id="refreshSlider" min="10" max="600" step="10" data-tauri-drag-region="false" title="Minimum 10s. macOS may throttle menubar updates below ~30s.">
@@ -61,7 +66,7 @@
         <button class="seg-btn" data-val="es" data-tauri-drag-region="false">Es</button>
       </div>
     </div>
-    <span class="version" id="appVersion">v1.0.0</span>
+    <span class="version" id="appVersion">v1.0.1</span>
   </div>
 
   <div class="footer">

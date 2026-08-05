@@ -31,6 +31,7 @@ struct AppState {
     refresh_interval_secs: Mutex<u64>,
     last_used_5h: Mutex<u32>,
     last_used_week: Mutex<u32>,
+    last_used_month: Mutex<u32>,
 }
 
 fn keyring_entry(user: &str) -> Option<keyring::Entry> {
@@ -107,6 +108,10 @@ fn get_api_key(reveal: Option<bool>, state: tauri::State<AppState>) -> String {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
+    // OCG reads from the `agent-limits` CLI and has no API key of its own.
+    if endpoint == "ocg" {
+        return String::new();
+    }
     let key = if endpoint == "io" {
         state
             .api_key_io
@@ -133,6 +138,12 @@ fn get_api_key(reveal: Option<bool>, state: tauri::State<AppState>) -> String {
 
 #[tauri::command]
 fn set_api_key(key: String, endpoint: String, state: tauri::State<AppState>) {
+    // OCG has no API key — usage comes from the `agent-limits` CLI, which
+    // manages its own credentials. Never store/overwrite a key for it.
+    if endpoint == "ocg" {
+        log::debug!("set_api_key: ocg endpoint uses agent-limits CLI, no key stored");
+        return;
+    }
     let key = key.trim();
     if !key.is_empty() && (!key.starts_with("sk-") || key.len() < 4 || key.len() > 256) {
         // SEC-6-7: log only booleans / counts — never a fragment of the key.
@@ -224,6 +235,9 @@ async fn fetch_and_update(app: &tauri::AppHandle) -> Result<serde_json::Value, S
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
+    if endpoint == "ocg" {
+        return fetch_ocg_and_update(app).await;
+    }
     let url = if endpoint == "io" {
         API_URL_IO
     } else {
@@ -320,6 +334,110 @@ async fn fetch_quota(
     fetch_and_update(&app).await
 }
 
+// OCG (OpenCode Go) usage comes from the `agent-limits` CLI rather than a
+// direct API call. GUI apps launched from /Applications inherit a minimal
+// PATH, so probe common install locations before falling back to PATH lookup.
+fn resolve_agent_limits_bin() -> String {
+    if let Ok(home) = std::env::var("HOME") {
+        let p = PathBuf::from(home).join(".cargo/bin/agent-limits");
+        if p.exists() {
+            return p.to_string_lossy().into_owned();
+        }
+    }
+    for p in ["/usr/local/bin/agent-limits", "/opt/homebrew/bin/agent-limits"] {
+        if PathBuf::from(p).exists() {
+            return p.to_string();
+        }
+    }
+    "agent-limits".to_string()
+}
+
+async fn fetch_ocg_quota_from_cli() -> Result<serde_json::Value, String> {
+    let bin = resolve_agent_limits_bin();
+    log::debug!("fetch_ocg_quota: invoking {}", bin);
+    let output = std::process::Command::new(&bin)
+        .args(["usage", "opencodego"])
+        .output()
+        .map_err(|e| format!("Failed to run {}: {}", bin, e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("agent-limits exited {}: {}", output.status, stderr.trim()));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("Failed to parse agent-limits output: {}", e))
+}
+
+fn parse_ocg_bars(v: &serde_json::Value) -> Result<Vec<serde_json::Value>, String> {
+    let limits = v
+        .get("providers")
+        .and_then(|p| p.get("opencodego"))
+        .and_then(|o| o.get("limits"))
+        .ok_or_else(|| "agent-limits: missing providers.opencodego.limits".to_string())?;
+    let mut bars = Vec::new();
+    for (id, key) in [("5h", "five_hour"), ("week", "seven_day"), ("month", "monthly")] {
+        let entry = limits
+            .get(key)
+            .ok_or_else(|| format!("agent-limits: missing limits.{}", key))?;
+        let used = entry.get("used_percent").and_then(|x| x.as_f64()).unwrap_or(0.0);
+        let reset = entry
+            .get("resets_at")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        bars.push(serde_json::json!({ "id": id, "used_percent": used, "reset_at": reset }));
+    }
+    Ok(bars)
+}
+
+#[tauri::command]
+async fn fetch_ocg_quota() -> Result<serde_json::Value, String> {
+    let v = fetch_ocg_quota_from_cli().await?;
+    let bars = parse_ocg_bars(&v)?;
+    Ok(serde_json::json!({ "bars": bars }))
+}
+
+async fn fetch_ocg_and_update(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let v = match fetch_ocg_quota_from_cli().await {
+        Ok(d) => d,
+        Err(e) => {
+            render_title(app, "OCG?");
+            return Err(e);
+        }
+    };
+    let bars = match parse_ocg_bars(&v) {
+        Ok(b) => b,
+        Err(e) => {
+            render_title(app, "OCG?");
+            return Err(e);
+        }
+    };
+    let mut u5 = 0u32;
+    let mut uw = 0u32;
+    let mut um = 0u32;
+    for bar in &bars {
+        let pct = (bar
+            .get("used_percent")
+            .and_then(|x| x.as_f64())
+            .unwrap_or(0.0))
+            .round() as u32;
+        match bar.get("id").and_then(|x| x.as_str()) {
+            Some("5h") => u5 = pct,
+            Some("week") => uw = pct,
+            Some("month") => um = pct,
+            _ => {}
+        }
+    }
+    {
+        let s = app.state::<AppState>();
+        *s.last_used_5h.lock().unwrap_or_else(|e| e.into_inner()) = u5;
+        *s.last_used_week.lock().unwrap_or_else(|e| e.into_inner()) = uw;
+        *s.last_used_month.lock().unwrap_or_else(|e| e.into_inner()) = um;
+    }
+    render_title(app, &format!("{}% {}% {}%", u5, uw, um));
+    Ok(serde_json::json!({ "bars": bars }))
+}
+
 fn apply_liquid_glass(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
     let glass = app.liquid_glass();
     if !glass.is_supported() {
@@ -352,18 +470,20 @@ fn main() {
             api_key_com: Mutex::new(String::new()),
             api_key_io: Mutex::new(String::new()),
             endpoint: Mutex::new(String::new()),
-            refresh_interval_secs: Mutex::new(300),
-            last_used_5h: Mutex::new(0),
-            last_used_week: Mutex::new(0),
-        })
-        .invoke_handler(tauri::generate_handler![
-            get_app_version,
-            get_api_key,
-            set_api_key,
-            fetch_quota,
-            quit_app,
-            set_refresh_interval,
-        ])
+                refresh_interval_secs: Mutex::new(300),
+                last_used_5h: Mutex::new(0),
+                last_used_week: Mutex::new(0),
+                last_used_month: Mutex::new(0),
+            })
+    .invoke_handler(tauri::generate_handler![
+        get_app_version,
+        get_api_key,
+        set_api_key,
+        fetch_quota,
+        fetch_ocg_quota,
+        quit_app,
+        set_refresh_interval,
+    ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
             if let Err(e) = app.handle().set_dock_visibility(false) {
