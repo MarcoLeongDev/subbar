@@ -12,12 +12,16 @@ use tokio::time;
 
 const API_URL_COM: &str = "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains";
 const API_URL_IO: &str = "https://api.minimax.io/v1/api/openplatform/coding_plan/remains";
-// KEYRING_SERVICE is intentionally kept as "pre-rebrand" for backward
-// compatibility: existing API keys stored in the OS keychain under that
-// service survive the SubBar rebrand.
-const KEYRING_SERVICE: &str = "pre-rebrand";
-const KEYRING_USER_COM: &str = "api_key_com";
-const KEYRING_USER_IO: &str = "api_key_io";
+// Keychain layout after the SubBar rebrand: each Minimax endpoint has its own
+// keychain item so the stored keys are named subbar-minimax (for `.com`) and
+// subbar-minimaxi (for `.io`). Legacy keys stored under the old
+// pre-rebrand / api_key_* entries are migrated on startup.
+const KEYRING_SERVICE_COM: &str = "subbar-minimax";
+const KEYRING_SERVICE_IO: &str = "subbar-minimaxi";
+const KEYRING_USER: &str = "subbar";
+const LEGACY_KEYRING_SERVICE: &str = "pre-rebrand";
+const LEGACY_KEYRING_USER_COM: &str = "api_key_com";
+const LEGACY_KEYRING_USER_IO: &str = "api_key_io";
 
 // OCG reads usage from the `agent-limits` CLI and has no in-app API key. When
 // the CLI cannot authenticate / has no usable credentials, the tray title
@@ -42,8 +46,8 @@ struct AppState {
     last_used_month: Mutex<u32>,
 }
 
-fn keyring_entry(user: &str) -> Option<keyring::Entry> {
-    match keyring::Entry::new(KEYRING_SERVICE, user) {
+fn keyring_entry(service: &str, user: &str) -> Option<keyring::Entry> {
+    match keyring::Entry::new(service, user) {
         Ok(entry) => Some(entry),
         Err(e) => {
             warn!("keyring entry creation failed for {}: {:?}", user, e);
@@ -52,21 +56,63 @@ fn keyring_entry(user: &str) -> Option<keyring::Entry> {
     }
 }
 
-fn load_key_from_keyring(user: &str) -> String {
-    keyring_entry(user)
+fn load_key_from_service(service: &str, user: &str) -> String {
+    keyring_entry(service, user)
         .and_then(|entry| entry.get_password().ok())
         .unwrap_or_default()
 }
 
-fn save_key_to_keyring(user: &str, key: &str) {
+fn load_key_from_keyring(service: &str, user: &str) -> String {
+    load_key_from_service(service, user)
+}
+
+fn save_key_to_keyring(service: &str, user: &str, key: &str) {
     if key.is_empty() {
-        let _ = keyring_entry(user).and_then(|entry| entry.delete_credential().ok());
+        let _ = keyring_entry(service, user).and_then(|entry| entry.delete_credential().ok());
     } else {
-        if let Some(entry) = keyring_entry(user) {
+        if let Some(entry) = keyring_entry(service, user) {
             if let Err(e) = entry.set_password(key) {
                 error!("keyring write failed for {}: {:?}", user, e);
             }
         }
+    }
+}
+
+fn com_keyring() -> (&'static str, &'static str) {
+    (KEYRING_SERVICE_COM, KEYRING_USER)
+}
+
+fn io_keyring() -> (&'static str, &'static str) {
+    (KEYRING_SERVICE_IO, KEYRING_USER)
+}
+
+fn endpoint_keyring(endpoint: &str) -> Option<(&'static str, &'static str)> {
+    match endpoint {
+        "com" => Some(com_keyring()),
+        "io" => Some(io_keyring()),
+        _ => None,
+    }
+}
+
+// Copy any keys still stored under the legacy pre-rebrand / api_key_*
+// entries into the new subbar-minimax / subbar-minimaxi items, then remove the
+// legacy items so the keychain no longer references the old name.
+fn migrate_keychain_if_needed() {
+    for (legacy_user, new_service) in [
+        (LEGACY_KEYRING_USER_COM, KEYRING_SERVICE_COM),
+        (LEGACY_KEYRING_USER_IO, KEYRING_SERVICE_IO),
+    ] {
+        if !load_key_from_keyring(new_service, KEYRING_USER).is_empty() {
+            continue;
+        }
+        let legacy = load_key_from_service(LEGACY_KEYRING_SERVICE, legacy_user);
+        if legacy.is_empty() {
+            continue;
+        }
+        save_key_to_keyring(new_service, KEYRING_USER, &legacy);
+        let _ = keyring_entry(LEGACY_KEYRING_SERVICE, legacy_user)
+            .and_then(|e| e.delete_credential().ok());
+        info!("Migrated keychain key {} -> {}", legacy_user, new_service);
     }
 }
 
@@ -91,10 +137,12 @@ fn migrate_config_json_if_needed(data_dir: &PathBuf) {
                 .to_string();
 
             if !com.is_empty() {
-                save_key_to_keyring(KEYRING_USER_COM, &com);
+                let (s, u) = com_keyring();
+                save_key_to_keyring(s, u, &com);
             }
             if !io.is_empty() {
-                save_key_to_keyring(KEYRING_USER_IO, &io);
+                let (s, u) = io_keyring();
+                save_key_to_keyring(s, u, &io);
             }
             info!("Migration complete. Deleting config.json.");
         }
@@ -166,12 +214,14 @@ fn set_api_key(key: String, endpoint: String, state: tauri::State<AppState>) {
         );
         return;
     }
-    let user = if endpoint == "io" {
-        KEYRING_USER_IO
-    } else {
-        KEYRING_USER_COM
+    let (service, user) = match endpoint_keyring(&endpoint) {
+        Some(v) => v,
+        None => {
+            log::warn!("set_api_key: unknown endpoint '{}'", endpoint);
+            return;
+        }
     };
-    save_key_to_keyring(user, &key);
+    save_key_to_keyring(service, user, &key);
 
     if endpoint == "io" {
         *state.api_key_io.lock().unwrap_or_else(|e| e.into_inner()) = key.to_string();
@@ -582,9 +632,15 @@ fn main() {
                 .unwrap_or_else(|_| PathBuf::from("subbar"));
             migrate_config_json_if_needed(&app_data_dir);
 
+            // Migrate legacy keychain names (pre-rebrand / api_key_*) to
+            // subbar-minimax / subbar-minimaxi before loading.
+            migrate_keychain_if_needed();
+
             // Load keys from keychain
-            let com_key = load_key_from_keyring(KEYRING_USER_COM);
-            let io_key = load_key_from_keyring(KEYRING_USER_IO);
+            let (s_com, u_com) = com_keyring();
+            let (s_io, u_io) = io_keyring();
+            let com_key = load_key_from_keyring(s_com, u_com);
+            let io_key = load_key_from_keyring(s_io, u_io);
 
             {
                 let state = handle.state::<AppState>();
@@ -805,6 +861,17 @@ mod tests {
         assert_eq!(normalize_endpoint("OCG"), Some("ocg".to_string()));
         assert_eq!(normalize_endpoint("bogus"), None);
         assert_eq!(normalize_endpoint(""), None);
+    }
+
+    #[test]
+    fn keyring_mapping_uses_subbar_names() {
+        // The rebrand must store Minimax keys under subbar-named keychain
+        // items, never the legacy pre-rebrand / api_key_* entries.
+        assert_eq!(com_keyring(), ("subbar-minimax", "subbar"));
+        assert_eq!(io_keyring(), ("subbar-minimaxi", "subbar"));
+        assert_eq!(endpoint_keyring("com"), Some(("subbar-minimax", "subbar")));
+        assert_eq!(endpoint_keyring("io"), Some(("subbar-minimaxi", "subbar")));
+        assert_eq!(endpoint_keyring("ocg"), None);
     }
 
     #[test]
