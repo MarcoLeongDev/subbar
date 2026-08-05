@@ -193,6 +193,49 @@ fn set_refresh_interval(interval: u64, state: tauri::State<AppState>) {
         .unwrap_or_else(|e| e.into_inner()) = interval;
 }
 
+// The frontend owns the selected endpoint (persisted in localStorage) and must
+// sync it to the backend so the background timer / tray title use the right
+// data source. Without this, switching to "ocg" in the UI would leave the Rust
+// endpoint at "com"/"io" and the menubar would keep rendering Minimax states
+// (e.g. AUTH! for an invalid Minimax key).
+fn normalize_endpoint(ep: &str) -> Option<String> {
+    match ep.trim().to_lowercase().as_str() {
+        "com" | "io" | "ocg" => Some(ep.trim().to_lowercase()),
+        _ => None,
+    }
+}
+
+fn persisted_endpoint_path(data_dir: &std::path::Path) -> PathBuf {
+    data_dir.join("endpoint.txt")
+}
+
+fn load_persisted_endpoint(data_dir: &std::path::Path) -> String {
+    fs::read_to_string(persisted_endpoint_path(data_dir))
+        .ok()
+        .and_then(|s| normalize_endpoint(&s))
+        .unwrap_or_else(|| "com".to_string())
+}
+
+fn save_persisted_endpoint(data_dir: &std::path::Path, ep: &str) {
+    let _ = fs::create_dir_all(data_dir);
+    let _ = fs::write(persisted_endpoint_path(data_dir), ep);
+}
+
+#[tauri::command]
+fn set_endpoint(ep: String, app: tauri::AppHandle, state: tauri::State<AppState>) {
+    let Some(ep) = normalize_endpoint(&ep) else {
+        log::debug!("set_endpoint: ignoring invalid endpoint");
+        return;
+    };
+    *state.endpoint.lock().unwrap_or_else(|e| e.into_inner()) = ep.clone();
+    // Persist so the backend starts on the correct endpoint next launch and
+    // never flashes the wrong data source (e.g. AUTH! from a stale Minimax key).
+    if let Ok(data_dir) = app.path().app_local_data_dir() {
+        save_persisted_endpoint(&data_dir.join("pre-rebrand"), &ep);
+    }
+    log::debug!("set_endpoint: synced");
+}
+
 fn redact_api_key(key: &str) -> String {
     if key.len() <= 8 {
         "[REDACTED]".to_string()
@@ -228,9 +271,14 @@ async fn fetch_quota_from_api(url: &str, api_key: &str) -> Result<serde_json::Va
 }
 
 fn render_title(app: &tauri::AppHandle, title: &str) {
+    log::info!("tray title: {}", title);
     if let Some(tray) = app.tray_by_id("main-tray") {
         let _ = tray.set_title(Some(title.to_string()));
     }
+}
+
+fn is_ocg_endpoint(endpoint: &str) -> bool {
+    endpoint == "ocg"
 }
 
 async fn fetch_and_update(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
@@ -240,7 +288,7 @@ async fn fetch_and_update(app: &tauri::AppHandle) -> Result<serde_json::Value, S
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
-    if endpoint == "ocg" {
+    if is_ocg_endpoint(&endpoint) {
         return fetch_ocg_and_update(app).await;
     }
     let url = if endpoint == "io" {
@@ -357,7 +405,18 @@ fn resolve_agent_limits_bin() -> String {
     "agent-limits".to_string()
 }
 
-async fn fetch_ocg_quota_from_cli() -> Result<serde_json::Value, String> {
+fn run_agent_limits() -> Result<serde_json::Value, String> {
+    // `agent-limits` is single-flight: concurrent invocations fail with exit
+    // status 1 (only one runs at a time). The app can fire several fetches at
+    // once (startup initial fetch + background timer + tray click), so
+    // serialize every CLI call. The guard is a sync mutex held only across the
+    // blocking subprocess call — never across an `.await` — so no deadlock.
+    static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+    let _guard = LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
     let bin = resolve_agent_limits_bin();
     log::debug!("fetch_ocg_quota: invoking {}", bin);
     let output = std::process::Command::new(&bin)
@@ -396,18 +455,27 @@ fn parse_ocg_bars(v: &serde_json::Value) -> Result<Vec<serde_json::Value>, Strin
 }
 
 #[tauri::command]
-async fn fetch_ocg_quota() -> Result<serde_json::Value, String> {
-    let v = fetch_ocg_quota_from_cli().await?;
-    let bars = parse_ocg_bars(&v)?;
-    Ok(serde_json::json!({ "bars": bars }))
+async fn fetch_ocg_quota(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    // Mirror fetch_quota: update the tray title as well as returning the bars,
+    // so switching to ocg refreshes the menubar immediately.
+    fetch_ocg_and_update(&app).await
 }
 
 async fn fetch_ocg_and_update(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
-    let v = match fetch_ocg_quota_from_cli().await {
+    let v = match run_agent_limits() {
         Ok(d) => d,
-        Err(e) => {
-            render_title(app, OCG_NO_AUTH_TITLE);
-            return Err(e);
+        Err(first) => {
+            // Transient CLI failure (e.g. a stale lock right after a relaunch):
+            // retry once before surfacing the no-key / unauth status.
+            time::sleep(Duration::from_millis(400)).await;
+            match run_agent_limits() {
+                Ok(d) => d,
+                Err(second) => {
+                    log::warn!("agent-limits failed twice: {first} | {second}");
+                    render_title(app, OCG_NO_AUTH_TITLE);
+                    return Err(second);
+                }
+            }
         }
     };
     let bars = match parse_ocg_bars(&v) {
@@ -489,6 +557,7 @@ fn main() {
         get_app_version,
         get_api_key,
         set_api_key,
+        set_endpoint,
         fetch_quota,
         fetch_ocg_quota,
         quit_app,
@@ -503,10 +572,12 @@ fn main() {
             let handle = app.handle().clone();
 
             // Migrate legacy config.json to keychain if present
-            if let Ok(data_dir) = app.path().app_local_data_dir() {
-                let data_dir = data_dir.join("pre-rebrand");
-                migrate_config_json_if_needed(&data_dir);
-            }
+            let app_data_dir = app
+                .path()
+                .app_local_data_dir()
+                .map(|d| d.join("pre-rebrand"))
+                .unwrap_or_else(|_| PathBuf::from("pre-rebrand"));
+            migrate_config_json_if_needed(&app_data_dir);
 
             // Load keys from keychain
             let com_key = load_key_from_keyring(KEYRING_USER_COM);
@@ -516,8 +587,11 @@ fn main() {
                 let state = handle.state::<AppState>();
                 *state.api_key_com.lock().unwrap_or_else(|e| e.into_inner()) = com_key;
                 *state.api_key_io.lock().unwrap_or_else(|e| e.into_inner()) = io_key;
-                // Endpoint defaults to "com"; restored from frontend localStorage via set_api_key
-                *state.endpoint.lock().unwrap_or_else(|e| e.into_inner()) = "com".to_string();
+                // Endpoint restored from the persisted value (last synced by the
+                // frontend) so the backend starts on the right data source and
+                // never flashes another endpoint's state.
+                *state.endpoint.lock().unwrap_or_else(|e| e.into_inner()) =
+                    load_persisted_endpoint(&app_data_dir);
                 // Default refresh interval 300s (5 min)
                 *state
                     .refresh_interval_secs
@@ -718,5 +792,69 @@ mod tests {
     fn ocg_no_auth_title_is_clear_status() {
         // The tray must show a clear no-key / unauth status, not a raw error.
         assert_eq!(OCG_NO_AUTH_TITLE, "unauth");
+    }
+
+    #[test]
+    fn endpoint_normalization_accepts_only_known_endpoints() {
+        assert_eq!(normalize_endpoint("ocg"), Some("ocg".to_string()));
+        assert_eq!(normalize_endpoint("com"), Some("com".to_string()));
+        assert_eq!(normalize_endpoint("io"), Some("io".to_string()));
+        assert_eq!(normalize_endpoint("OCG"), Some("ocg".to_string()));
+        assert_eq!(normalize_endpoint("bogus"), None);
+        assert_eq!(normalize_endpoint(""), None);
+    }
+
+    #[test]
+    fn endpoint_persistence_round_trips_normalized() {
+        let dir = std::env::temp_dir().join(format!("mm-endpoint-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        // No persisted value yet -> default to com.
+        assert_eq!(load_persisted_endpoint(&dir), "com");
+        save_persisted_endpoint(&dir, "ocg");
+        assert_eq!(load_persisted_endpoint(&dir), "ocg");
+        // Persisted values are normalized on load.
+        save_persisted_endpoint(&dir, "OCG");
+        assert_eq!(load_persisted_endpoint(&dir), "ocg");
+        // Corrupt content falls back to the default.
+        fs::write(persisted_endpoint_path(&dir), "???").expect("write corrupt");
+        assert_eq!(load_persisted_endpoint(&dir), "com");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ocg_endpoint_dispatches_away_from_minimax() {
+        // The tray "AUTH!" marker only exists on the Minimax path. When the
+        // synced endpoint is ocg, the dispatcher MUST route to the ocg path so
+        // the menubar never shows Minimax auth states for ocg.
+        assert!(is_ocg_endpoint("ocg"));
+        assert!(!is_ocg_endpoint("com"));
+        assert!(!is_ocg_endpoint("io"));
+    }
+
+    // Integration test against the real `agent-limits usage opencodego` CLI:
+    // proves the ocg data path parses three bars with valid values.
+    #[test]
+    fn agent_limits_cli_parses_three_bars_in_range() {
+        let v = run_agent_limits().expect("real agent-limits CLI should run");
+        let bars = parse_ocg_bars(&v).expect("bars should parse");
+        assert_eq!(bars.len(), 3);
+        let ids: Vec<&str> = bars
+            .iter()
+            .filter_map(|b| b.get("id").and_then(|x| x.as_str()))
+            .collect();
+        assert_eq!(ids, vec!["5h", "week", "month"]);
+        for b in bars {
+            let used = b
+                .get("used_percent")
+                .and_then(|x| x.as_f64())
+                .expect("used_percent should be a number");
+            assert!(
+                (0.0..=100.0).contains(&used),
+                "used_percent {} out of range",
+                used
+            );
+            let reset = b.get("reset_at").and_then(|x| x.as_str()).unwrap_or("");
+            assert!(!reset.is_empty(), "reset_at should be present");
+        }
     }
 }

@@ -229,6 +229,10 @@ async function switchEndpoint(ep) {
   endpoint = ep;
   localStorage.setItem('mm_endpoint', endpoint);
   applyEndpointChrome();
+  // Sync the selected endpoint to the backend so the background timer / tray
+  // title use the same data source (otherwise the menubar keeps showing the
+  // previous endpoint's state, e.g. AUTH! from an invalid Minimax key).
+  await invoke('set_endpoint', { ep: endpoint });
   await refreshKeyDisplay();
   $('content').textContent = '';
   restartTimer();
@@ -485,6 +489,8 @@ async function init() {
   applyLang();
   applyTheme();
   applyEndpointChrome();
+  // Sync the persisted endpoint to the backend on startup too.
+  try { await invoke('set_endpoint', { ep: endpoint }); } catch(_) {}
   var tip = $('keyShieldTip');
   if (tip) tip.textContent = t('aes');
   fetchUsage();
