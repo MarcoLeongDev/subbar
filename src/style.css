@@ -16,6 +16,7 @@ html,body{
   --pill-bg:rgba(255,255,255,0.06);
   --pill-fill-5h:linear-gradient(90deg,#d44a3a,#ec7567);
   --pill-fill-week:linear-gradient(90deg,#bd2f5f,#e34d83);
+  --pill-fill-month:linear-gradient(90deg,#7c3aed,#a78bfa);
   --input-bg:rgba(255,255,255,0.06);
   --input-border:rgba(255,255,255,0.12);
   --btn-hover:rgba(255,255,255,0.08);
@@ -43,6 +44,7 @@ html,body{
   --pill-bg:rgba(0,0,0,0.06);
   --pill-fill-5h:linear-gradient(90deg,#d44a3a,#ec7567);
   --pill-fill-week:linear-gradient(90deg,#bd2f5f,#e34d83);
+  --pill-fill-month:linear-gradient(90deg,#7c3aed,#a78bfa);
   --input-bg:rgba(0,0,0,0.04);
   --input-border:rgba(0,0,0,0.12);
   --btn-hover:rgba(0,0,0,0.06);
@@ -245,6 +247,7 @@ input[type="range"]::-webkit-slider-thumb{
 
 .pill-5h .pill-fill{background:var(--pill-fill-5h)}
 .pill-week .pill-fill{background:var(--pill-fill-week)}
+.pill-month .pill-fill{background:var(--pill-fill-month)}
 
 /* OCG endpoint shows 3 bars (5h / week / month) in the same body area, so
    pills are shrunk to keep all three inside the fixed widget height. */
