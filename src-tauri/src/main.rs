@@ -712,8 +712,11 @@ fn main() {
             let handle_clone = handle.clone();
             if let Some(tray) = handle.tray_by_id("main-tray") {
                 tray.on_tray_icon_event(move |_tray, event| {
+                    // Open the panel on any click (left or right) so the tray
+                    // icon is usable for users who expect right-click to open it.
                     if let tauri::tray::TrayIconEvent::Click {
-                        button: tauri::tray::MouseButton::Left,
+                        button:
+                            tauri::tray::MouseButton::Left | tauri::tray::MouseButton::Right,
                         button_state: tauri::tray::MouseButtonState::Up,
                         ..
                     } = event
