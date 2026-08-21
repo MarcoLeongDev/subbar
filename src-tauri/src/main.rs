@@ -458,6 +458,24 @@ fn resolve_agent_limits_bin() -> String {
     "agent-limits".to_string()
 }
 
+// True when the `agent-limits` CLI can be located. `resolve_agent_limits_bin`
+// returns a concrete path when a known install location exists, or the bare
+// `agent-limits` name (which we probe on PATH) when none do.
+fn is_agent_limits_installed() -> bool {
+    let bin = resolve_agent_limits_bin();
+    if bin.contains('/') || bin.contains('\\') {
+        return PathBuf::from(&bin).exists();
+    }
+    if let Ok(paths) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            if dir.join("agent-limits").exists() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn run_agent_limits() -> Result<serde_json::Value, String> {
     // `agent-limits` is single-flight: concurrent invocations fail with exit
     // status 1 (only one runs at a time). The app can fire several fetches at
@@ -512,6 +530,25 @@ async fn fetch_ocg_quota(app: tauri::AppHandle) -> Result<serde_json::Value, Str
     // Mirror fetch_quota: update the tray title as well as returning the bars,
     // so switching to ocg refreshes the menubar immediately.
     fetch_ocg_and_update(&app).await
+}
+
+#[tauri::command]
+fn agent_limits_installed() -> bool {
+    is_agent_limits_installed()
+}
+
+// Open an external URL in the user's default browser. Tauri's webview does not
+// navigate to foreign links on its own, so the ocg hint's CLI link calls this.
+#[tauri::command]
+fn open_external(url: String) {
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(&url).spawn();
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd")
+        .args(["/c", "start", "", &url])
+        .spawn();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
 }
 
 async fn fetch_ocg_and_update(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
@@ -613,6 +650,8 @@ fn main() {
         set_endpoint,
         fetch_quota,
         fetch_ocg_quota,
+        agent_limits_installed,
+        open_external,
         quit_app,
         set_refresh_interval,
     ])

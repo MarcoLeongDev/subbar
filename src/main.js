@@ -8,6 +8,12 @@ var lang = localStorage.getItem('mm_lang') || 'en';
 var theme = localStorage.getItem('mm_theme') || 'dark';
 var endpoint = localStorage.getItem('mm_endpoint') || 'com';
 var settingsOpen = false;
+// GitHub repo for the `agent-limits` CLI that powers the ocg endpoint.
+var AGENT_LIMITS_URL = 'https://github.com/f4ah6o/agent-limits';
+var CLI_NAME = 'agent-limits';
+// Whether the `agent-limits` CLI is installed (refreshed when the ocg endpoint
+// is shown). Drives the ocg hint copy.
+var agentLimitsInstalled = false;
 // SEC-6-6: apiKey holds the plaintext only after the user explicitly reveals
 // it via the eye button. Otherwise the IPC returns a redacted form.
 var apiKey = '';
@@ -34,23 +40,23 @@ var i18n = {
   en: {title:'SubBar',unit:'s',aes:'Stored in OS keychain',
        errKey:'API key needed\nclick',
        errKeyPrefix:'API key should start with sk-\nclick',
-       pill5h:'5h',pillWeek:'Week',pillMonth:'Month',ocgHint:'Data from agent-limits CLI'},
+        pill5h:'5h',pillWeek:'Week',pillMonth:'Month',ocgHint:'Data from agent-limits CLI',ocgHintMissing:'Install agent-limits CLI to show usage'},
   'zh-tw': {title:'SubBar',unit:'秒',aes:'儲存於 OS 鑰匙圈',
-       errKey:'需要 API 金鑰\n點擊',
-       errKeyPrefix:'API 金鑰應以 sk- 開頭\n點擊',
-       pill5h:'5小時',pillWeek:'週',pillMonth:'月',ocgHint:'資料來自 agent-limits CLI'},
+        errKey:'需要 API 金鑰\n點擊',
+        errKeyPrefix:'API 金鑰應以 sk- 開頭\n點擊',
+        pill5h:'5小時',pillWeek:'週',pillMonth:'月',ocgHint:'資料來自 agent-limits CLI',ocgHintMissing:'請安裝 agent-limits CLI 以顯示用量'},
   zh: {title:'SubBar',unit:'秒',aes:'存储于 OS 钥匙串',
-       errKey:'需要 API 密钥\n点击',
-       errKeyPrefix:'API 密钥应以 sk- 开头\n点击',
-       pill5h:'5小时',pillWeek:'周',pillMonth:'月',ocgHint:'数据来自 agent-limits CLI'},
+        errKey:'需要 API 密钥\n点击',
+        errKeyPrefix:'API 密钥应以 sk- 开头\n点击',
+        pill5h:'5小时',pillWeek:'周',pillMonth:'月',ocgHint:'数据来自 agent-limits CLI',ocgHintMissing:'请安装 agent-limits CLI 以显示用量'},
   ja: {title:'SubBar',unit:'秒',aes:'OSキーチェーンに保存',
-       errKey:'APIキーが必要です\nクリック',
-       errKeyPrefix:'APIキーは sk- で始める必要があります\nクリック',
-       pill5h:'5時間',pillWeek:'週間',pillMonth:'月',ocgHint:'agent-limits CLI のデータ'},
+        errKey:'APIキーが必要です\nクリック',
+        errKeyPrefix:'APIキーは sk- で始める必要があります\nクリック',
+        pill5h:'5時間',pillWeek:'週間',pillMonth:'月',ocgHint:'agent-limits CLI のデータ',ocgHintMissing:'用量を表示するには agent-limits CLI をインストール'},
   es: {title:'SubBar',unit:'s',aes:'Almacenado en llavero del SO',
-       errKey:'Se necesita clave API\nhaga clic en',
-       errKeyPrefix:'La clave API debe comenzar con sk-\nhaga clic en',
-       pill5h:'5h',pillWeek:'Semana',pillMonth:'Mes',ocgHint:'Datos del CLI agent-limits'}
+        errKey:'Se necesita clave API\nhaga clic en',
+        errKeyPrefix:'La clave API debe comenzar con sk-\nhaga clic en',
+        pill5h:'5h',pillWeek:'Semana',pillMonth:'Mes',ocgHint:'Datos del CLI agent-limits',ocgHintMissing:'Instala la CLI agent-limits para ver el uso'}
 };
 function t(k) { return (i18n[lang] || i18n.en)[k] || k; }
 function applyLang() {
@@ -229,6 +235,7 @@ async function switchEndpoint(ep) {
   endpoint = ep;
   localStorage.setItem('mm_endpoint', endpoint);
   applyEndpointChrome();
+  if (endpoint === 'ocg') await refreshAgentLimitsHint();
   // Sync the selected endpoint to the backend so the background timer / tray
   // title use the same data source (otherwise the menubar keeps showing the
   // previous endpoint's state, e.g. AUTH! from an invalid Minimax key).
@@ -277,6 +284,7 @@ async function applySettings() {
   localStorage.setItem('mm_theme', theme);
   lang = newLang;
   applyLang();
+  renderOcgHint();
   applyTheme();
 
   if (langChanged || themeChanged) $('content').textContent = '';
@@ -476,7 +484,41 @@ function applyEndpointChrome() {
   var keyRow = $('apiKeyInput').closest('.setting-row');
   if (keyRow) keyRow.style.display = endpoint === 'ocg' ? 'none' : '';
   $('ocgHintRow').style.display = endpoint === 'ocg' ? 'flex' : 'none';
+  if (endpoint === 'ocg') renderOcgHint();
 }
+
+// Render the ocg hint. In every case the literal `agent-limits` token is an
+// anchor to the CLI's GitHub repo (no underline until hovered); when the CLI is
+// missing we swap in a redirect message instead of "Data from ...".
+function renderOcgHint() {
+  if (endpoint !== 'ocg') return;
+  var span = $('ocgHintRow').querySelector('.ocg-hint-text');
+  if (!span) return;
+  var msg = agentLimitsInstalled ? t('ocgHint') : t('ocgHintMissing');
+  span.innerHTML = msg.split(CLI_NAME).join(
+    '<a href="' + AGENT_LIMITS_URL + '" class="cli-link" target="_blank" rel="noreferrer">' + CLI_NAME + '</a>'
+  );
+}
+
+async function refreshAgentLimitsHint() {
+  if (endpoint !== 'ocg') return;
+  try {
+    agentLimitsInstalled = await invoke('agent_limits_installed');
+  } catch (e) {
+    agentLimitsInstalled = false;
+  }
+  renderOcgHint();
+}
+
+// The CLI link must open in the system browser (the webview won't navigate to
+// a foreign URL on its own). Intercept clicks and hand the URL to Rust.
+$('ocgHintRow').addEventListener('click', function(e) {
+  var a = e.target.closest('.cli-link');
+  if (!a) return;
+  e.preventDefault();
+  var url = a.getAttribute('href');
+  invoke('open_external', { url: url }).catch(function() {});
+});
 
 async function init() {
   // SEC-6-6: fetch redacted form only; plaintext never enters the webview
@@ -489,6 +531,7 @@ async function init() {
   applyLang();
   applyTheme();
   applyEndpointChrome();
+  if (endpoint === 'ocg') await refreshAgentLimitsHint();
   // Sync the persisted endpoint to the backend on startup too.
   try { await invoke('set_endpoint', { ep: endpoint }); } catch(_) {}
   var tip = $('keyShieldTip');
