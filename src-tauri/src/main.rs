@@ -18,6 +18,8 @@ const API_URL_IO: &str = "https://api.minimax.io/v1/api/openplatform/coding_plan
 // pre-rebrand / api_key_* entries are migrated on startup.
 const KEYRING_SERVICE_COM: &str = "subbar-minimax";
 const KEYRING_SERVICE_IO: &str = "subbar-minimaxi";
+const KEYRING_SERVICE_OCG_WS: &str = "subbar-ocg-ws";
+const KEYRING_SERVICE_OCG_COOKIE: &str = "subbar-ocg-cookie";
 const KEYRING_USER: &str = "subbar";
 const LEGACY_KEYRING_SERVICE: &str = "pre-rebrand";
 const LEGACY_KEYRING_USER_COM: &str = "api_key_com";
@@ -39,6 +41,8 @@ const WIDGET_OUTER_WIDTH: f64 = 212.0;
 struct AppState {
     api_key_com: Mutex<String>,
     api_key_io: Mutex<String>,
+    ocg_workspace_id: Mutex<String>,
+    ocg_auth_cookie: Mutex<String>,
     endpoint: Mutex<String>,
     refresh_interval_secs: Mutex<u64>,
     last_used_5h: Mutex<u32>,
@@ -84,6 +88,14 @@ fn com_keyring() -> (&'static str, &'static str) {
 
 fn io_keyring() -> (&'static str, &'static str) {
     (KEYRING_SERVICE_IO, KEYRING_USER)
+}
+
+fn ocg_ws_keyring() -> (&'static str, &'static str) {
+    (KEYRING_SERVICE_OCG_WS, KEYRING_USER)
+}
+
+fn ocg_cookie_keyring() -> (&'static str, &'static str) {
+    (KEYRING_SERVICE_OCG_COOKIE, KEYRING_USER)
 }
 
 fn endpoint_keyring(endpoint: &str) -> Option<(&'static str, &'static str)> {
@@ -229,6 +241,60 @@ fn set_api_key(key: String, endpoint: String, state: tauri::State<AppState>) {
         *state.api_key_com.lock().unwrap_or_else(|e| e.into_inner()) = key.to_string();
     }
     *state.endpoint.lock().unwrap_or_else(|e| e.into_inner()) = endpoint;
+}
+
+// OpenCode Go does not use an API key; it authenticates with a workspace ID and
+// a session auth cookie scraped from the dashboard. Both are stored in the OS
+// keychain (mirroring the Minimax key) and surfaced to the UI here. The cookie
+// is returned redacted unless explicitly revealed.
+#[tauri::command]
+fn get_ocg_credentials(reveal: Option<bool>, state: tauri::State<AppState>) -> serde_json::Value {
+    let ws = state
+        .ocg_workspace_id
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let cookie = state
+        .ocg_auth_cookie
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let cookie_out = if reveal.unwrap_or(false) {
+        cookie.clone()
+    } else if cookie.is_empty() {
+        String::new()
+    } else {
+        redact_api_key(&cookie)
+    };
+    serde_json::json!({
+        "workspace_id": ws,
+        "auth_cookie": cookie_out,
+        "has_credentials": !ws.is_empty() && !cookie.is_empty(),
+    })
+}
+
+#[tauri::command]
+fn set_ocg_credentials(
+    workspace_id: String,
+    auth_cookie: String,
+    state: tauri::State<AppState>,
+) {
+    let ws = workspace_id.trim().to_string();
+    let cookie = auth_cookie.trim().to_string();
+    let has = !ws.is_empty() && !cookie.is_empty();
+    let (ws_s, ws_u) = ocg_ws_keyring();
+    let (c_s, c_u) = ocg_cookie_keyring();
+    save_key_to_keyring(ws_s, ws_u, &ws);
+    save_key_to_keyring(c_s, c_u, &cookie);
+    *state
+        .ocg_workspace_id
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = ws;
+    *state
+        .ocg_auth_cookie
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = cookie;
+    log::debug!("set_ocg_credentials: stored (has={})", has);
 }
 
 #[tauri::command]
@@ -440,67 +506,27 @@ async fn fetch_quota(
     fetch_and_update(&app).await
 }
 
-// OCG (OpenCode Go) usage comes from the `agent-limits` CLI rather than a
-// direct API call. GUI apps launched from /Applications inherit a minimal
-// PATH, so probe common install locations before falling back to PATH lookup.
-fn resolve_agent_limits_bin() -> String {
-    if let Ok(home) = std::env::var("HOME") {
-        let p = PathBuf::from(home).join(".cargo/bin/agent-limits");
-        if p.exists() {
-            return p.to_string_lossy().into_owned();
-        }
-    }
-    for p in ["/usr/local/bin/agent-limits", "/opt/homebrew/bin/agent-limits"] {
-        if PathBuf::from(p).exists() {
-            return p.to_string();
-        }
-    }
-    "agent-limits".to_string()
-}
-
-// True when the `agent-limits` CLI can be located. `resolve_agent_limits_bin`
-// returns a concrete path when a known install location exists, or the bare
-// `agent-limits` name (which we probe on PATH) when none do.
-fn is_agent_limits_installed() -> bool {
-    let bin = resolve_agent_limits_bin();
-    if bin.contains('/') || bin.contains('\\') {
-        return PathBuf::from(&bin).exists();
-    }
-    if let Ok(paths) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&paths) {
-            if dir.join("agent-limits").exists() {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn run_agent_limits() -> Result<serde_json::Value, String> {
-    // `agent-limits` is single-flight: concurrent invocations fail with exit
-    // status 1 (only one runs at a time). The app can fire several fetches at
-    // once (startup initial fetch + background timer + tray click), so
-    // serialize every CLI call. The guard is a sync mutex held only across the
-    // blocking subprocess call — never across an `.await` — so no deadlock.
-    static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
-    let _guard = LOCK
-        .get_or_init(|| std::sync::Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-
-    let bin = resolve_agent_limits_bin();
-    log::debug!("fetch_ocg_quota: invoking {}", bin);
-    let output = std::process::Command::new(&bin)
-        .args(["usage", "opencodego"])
-        .output()
-        .map_err(|e| format!("Failed to run {}: {}", bin, e))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("agent-limits exited {}: {}", output.status, stderr.trim()));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str(stdout.trim())
-        .map_err(|e| format!("Failed to parse agent-limits output: {}", e))
+// OCG (OpenCode Go) usage is fetched in-process by the vendored `agent-limits`
+// crate (no external CLI dependency). Credentials are read from the OS keychain
+// via AppState. The session cookie can be rejected/expired, so failures surface
+// as errors and the caller falls back to the `unauth` tray status.
+async fn run_agent_limits(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let (ws, cookie) = {
+        let s = app.state::<AppState>();
+        let ws = s
+            .ocg_workspace_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let cookie = s
+            .ocg_auth_cookie
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        (ws, cookie)
+    };
+    log::debug!("fetch_ocg_quota: fetching in-process via vendored agent-limits");
+    agent_limits::usage(http_client(), &ws, &cookie).await
 }
 
 fn parse_ocg_bars(v: &serde_json::Value) -> Result<Vec<serde_json::Value>, String> {
@@ -532,13 +558,8 @@ async fn fetch_ocg_quota(app: tauri::AppHandle) -> Result<serde_json::Value, Str
     fetch_ocg_and_update(&app).await
 }
 
-#[tauri::command]
-fn agent_limits_installed() -> bool {
-    is_agent_limits_installed()
-}
-
 // Open an external URL in the user's default browser. Tauri's webview does not
-// navigate to foreign links on its own, so the ocg hint's CLI link calls this.
+// navigate to foreign links on its own, so the ocg help link calls this.
 #[tauri::command]
 fn open_external(url: String) {
     #[cfg(target_os = "macos")]
@@ -552,16 +573,16 @@ fn open_external(url: String) {
 }
 
 async fn fetch_ocg_and_update(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
-    let v = match run_agent_limits() {
+    let v = match run_agent_limits(app).await {
         Ok(d) => d,
         Err(first) => {
-            // Transient CLI failure (e.g. a stale lock right after a relaunch):
-            // retry once before surfacing the no-key / unauth status.
+            // Transient failure (e.g. a momentary network blip): retry once
+            // before surfacing the no-key / unauth status.
             time::sleep(Duration::from_millis(400)).await;
-            match run_agent_limits() {
+            match run_agent_limits(app).await {
                 Ok(d) => d,
                 Err(second) => {
-                    log::warn!("agent-limits failed twice: {first} | {second}");
+                    log::warn!("ocg fetch failed twice: {first} | {second}");
                     render_title(app, OCG_NO_AUTH_TITLE);
                     return Err(second);
                 }
@@ -637,6 +658,8 @@ fn main() {
         .manage(AppState {
             api_key_com: Mutex::new(String::new()),
             api_key_io: Mutex::new(String::new()),
+            ocg_workspace_id: Mutex::new(String::new()),
+            ocg_auth_cookie: Mutex::new(String::new()),
             endpoint: Mutex::new(String::new()),
                 refresh_interval_secs: Mutex::new(300),
                 last_used_5h: Mutex::new(0),
@@ -647,10 +670,11 @@ fn main() {
         get_app_version,
         get_api_key,
         set_api_key,
+        get_ocg_credentials,
+        set_ocg_credentials,
         set_endpoint,
         fetch_quota,
         fetch_ocg_quota,
-        agent_limits_installed,
         open_external,
         quit_app,
         set_refresh_interval,
@@ -678,13 +702,19 @@ fn main() {
             // Load keys from keychain
             let (s_com, u_com) = com_keyring();
             let (s_io, u_io) = io_keyring();
+            let (s_ws, u_ws) = ocg_ws_keyring();
+            let (s_ck, u_ck) = ocg_cookie_keyring();
             let com_key = load_key_from_keyring(s_com, u_com);
             let io_key = load_key_from_keyring(s_io, u_io);
+            let ocg_ws = load_key_from_keyring(s_ws, u_ws);
+            let ocg_ck = load_key_from_keyring(s_ck, u_ck);
 
             {
                 let state = handle.state::<AppState>();
                 *state.api_key_com.lock().unwrap_or_else(|e| e.into_inner()) = com_key;
                 *state.api_key_io.lock().unwrap_or_else(|e| e.into_inner()) = io_key;
+                *state.ocg_workspace_id.lock().unwrap_or_else(|e| e.into_inner()) = ocg_ws;
+                *state.ocg_auth_cookie.lock().unwrap_or_else(|e| e.into_inner()) = ocg_ck;
                 // Endpoint restored from the persisted value (last synced by the
                 // frontend) so the backend starts on the right data source and
                 // never flashes another endpoint's state.
@@ -917,6 +947,14 @@ mod tests {
     }
 
     #[test]
+    fn ocg_keyring_items_use_subbar_names() {
+        // OpenCode Go credentials live in their own keychain items so they never
+        // collide with the Minimax keys.
+        assert_eq!(ocg_ws_keyring(), ("subbar-ocg-ws", "subbar"));
+        assert_eq!(ocg_cookie_keyring(), ("subbar-ocg-cookie", "subbar"));
+    }
+
+    #[test]
     fn endpoint_persistence_round_trips_normalized() {
         let dir = std::env::temp_dir().join(format!("mm-endpoint-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -943,11 +981,21 @@ mod tests {
         assert!(!is_ocg_endpoint("io"));
     }
 
-    // Integration test against the real `agent-limits usage opencodego` CLI:
-    // proves the ocg data path parses three bars with valid values.
+    // The vendored provider returns the same JSON shape the UI parser expects.
+    // This proves the in-process fetch integrates with `parse_ocg_bars`.
     #[test]
-    fn agent_limits_cli_parses_three_bars_in_range() {
-        let v = run_agent_limits().expect("real agent-limits CLI should run");
+    fn parse_ocg_bars_reads_vendored_shape() {
+        let v = serde_json::json!({
+            "providers": {
+                "opencodego": {
+                    "limits": {
+                        "five_hour": { "used_percent": 12.5, "resets_at": "2026-08-24T12:00:00+00:00" },
+                        "seven_day": { "used_percent": 42.0, "resets_at": "2026-08-30T12:00:00+00:00" },
+                        "monthly":   { "used_percent": 78.0, "resets_at": "2026-08-31T12:00:00+00:00" }
+                    }
+                }
+            }
+        });
         let bars = parse_ocg_bars(&v).expect("bars should parse");
         assert_eq!(bars.len(), 3);
         let ids: Vec<&str> = bars

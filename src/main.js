@@ -8,18 +8,17 @@ var lang = localStorage.getItem('mm_lang') || 'en';
 var theme = localStorage.getItem('mm_theme') || 'dark';
 var endpoint = localStorage.getItem('mm_endpoint') || 'com';
 var settingsOpen = false;
-// GitHub repo for the `agent-limits` CLI that powers the ocg endpoint.
-var AGENT_LIMITS_URL = 'https://github.com/f4ah6o/agent-limits';
-var CLI_NAME = 'agent-limits';
-// Whether the `agent-limits` CLI is installed (refreshed when the ocg endpoint
-// is shown). Drives the ocg hint copy.
-var agentLimitsInstalled = false;
 // SEC-6-6: apiKey holds the plaintext only after the user explicitly reveals
 // it via the eye button. Otherwise the IPC returns a redacted form.
 var apiKey = '';
 var redactedKey = '';
 var keyRevealed = false;
 var keyInputDirty = false;
+// OpenCode Go credential state (mirrors the Minimax key state above).
+var ocgWs = '';
+var ocgCookie = '';
+var ocgRevealed = false;
+var ocgDirty = false;
 
 function invoke(cmd, args) {
   return window.__TAURI__.core.invoke(cmd, args);
@@ -40,23 +39,23 @@ var i18n = {
   en: {title:'SubBar',unit:'s',aes:'Stored in OS keychain',
        errKey:'API key needed\nclick',
        errKeyPrefix:'API key should start with sk-\nclick',
-        pill5h:'5h',pillWeek:'Week',pillMonth:'Month',ocgHint:'Data from agent-limits CLI',ocgHintMissing:'Install agent-limits CLI to show usage'},
+        pill5h:'5h',pillWeek:'Week',pillMonth:'Month',ocgHint:'Enter your OpenCode Go workspace ID & auth cookie (from opencode.ai)'},
   'zh-tw': {title:'SubBar',unit:'秒',aes:'儲存於 OS 鑰匙圈',
         errKey:'需要 API 金鑰\n點擊',
         errKeyPrefix:'API 金鑰應以 sk- 開頭\n點擊',
-        pill5h:'5小時',pillWeek:'週',pillMonth:'月',ocgHint:'資料來自 agent-limits CLI',ocgHintMissing:'請安裝 agent-limits CLI 以顯示用量'},
+        pill5h:'5小時',pillWeek:'週',pillMonth:'月',ocgHint:'請輸入 OpenCode Go 工作區 ID 與 auth cookie（來自 opencode.ai）'},
   zh: {title:'SubBar',unit:'秒',aes:'存储于 OS 钥匙串',
         errKey:'需要 API 密钥\n点击',
         errKeyPrefix:'API 密钥应以 sk- 开头\n点击',
-        pill5h:'5小时',pillWeek:'周',pillMonth:'月',ocgHint:'数据来自 agent-limits CLI',ocgHintMissing:'请安装 agent-limits CLI 以显示用量'},
+        pill5h:'5小时',pillWeek:'周',pillMonth:'月',ocgHint:'请输入 OpenCode Go 工作区 ID 与 auth cookie（来自 opencode.ai）'},
   ja: {title:'SubBar',unit:'秒',aes:'OSキーチェーンに保存',
         errKey:'APIキーが必要です\nクリック',
         errKeyPrefix:'APIキーは sk- で始める必要があります\nクリック',
-        pill5h:'5時間',pillWeek:'週間',pillMonth:'月',ocgHint:'agent-limits CLI のデータ',ocgHintMissing:'用量を表示するには agent-limits CLI をインストール'},
+        pill5h:'5時間',pillWeek:'週間',pillMonth:'月',ocgHint:'OpenCode Go の workspace ID と auth cookie を入力（opencode.ai から）'},
   es: {title:'SubBar',unit:'s',aes:'Almacenado en llavero del SO',
         errKey:'Se necesita clave API\nhaga clic en',
         errKeyPrefix:'La clave API debe comenzar con sk-\nhaga clic en',
-        pill5h:'5h',pillWeek:'Semana',pillMonth:'Mes',ocgHint:'Datos del CLI agent-limits',ocgHintMissing:'Instala la CLI agent-limits para ver el uso'}
+        pill5h:'5h',pillWeek:'Semana',pillMonth:'Mes',ocgHint:'Introduce el ID de workspace y auth cookie de OpenCode Go (de opencode.ai)'}
 };
 function t(k) { return (i18n[lang] || i18n.en)[k] || k; }
 function applyLang() {
@@ -197,6 +196,10 @@ function toggleSettings() {
 }
 
 async function refreshKeyDisplay() {
+  if (endpoint === 'ocg') {
+    await refreshOcgCredsDisplay();
+    return;
+  }
   // SEC-6-6: default fetch returns redacted form; only the eye toggle fetches plaintext.
   redactedKey = await invoke('get_api_key', { reveal: false });
   $('apiKeyInput').placeholder = redactedKey || 'sk-cp-...';
@@ -205,6 +208,63 @@ async function refreshKeyDisplay() {
   keyInputDirty = false;
   $('apiKeyInput').value = '';
   updateKeyState();
+}
+
+async function refreshOcgCredsDisplay() {
+  var creds = await invoke('get_ocg_credentials', { reveal: false });
+  ocgWs = creds.workspace_id || '';
+  ocgCookie = '';
+  ocgRevealed = false;
+  ocgDirty = false;
+  $('ocgWsInput').value = ocgWs;
+  $('ocgCookieInput').value = '';
+  updateOcgCredsState();
+}
+
+async function toggleOcgCookieReveal() {
+  if (ocgRevealed) {
+    ocgCookie = '';
+    $('ocgCookieInput').value = '';
+    ocgRevealed = false;
+    ocgDirty = false;
+  } else {
+    var creds = await invoke('get_ocg_credentials', { reveal: true });
+    ocgCookie = creds.auth_cookie || '';
+    $('ocgCookieInput').value = ocgCookie;
+    ocgRevealed = true;
+    ocgDirty = false;
+  }
+  updateOcgCredsState();
+}
+
+async function saveOcgCreds() {
+  var ws = $('ocgWsInput').value.trim();
+  var cookie = $('ocgCookieInput').value.trim();
+  await invoke('set_ocg_credentials', { workspace_id: ws, auth_cookie: cookie });
+  ocgDirty = false;
+  ocgRevealed = false;
+  await refreshOcgCredsDisplay();
+}
+
+async function clearOcgCreds() {
+  $('ocgWsInput').value = '';
+  $('ocgCookieInput').value = '';
+  ocgWs = '';
+  ocgCookie = '';
+  ocgDirty = true;
+  await saveOcgCreds();
+  $('ocgWsInput').focus();
+}
+
+function updateOcgCredsState() {
+  var hasWs = !!$('ocgWsInput').value.trim();
+  var hasCookie = !!$('ocgCookieInput').value.trim() || !!ocgCookie;
+  var hasStored = !!ocgWs && !!ocgCookie;
+  $('ocgShieldBtn').style.display = hasStored ? 'flex' : 'none';
+  $('ocgEyeBtn').style.display = hasStored ? 'flex' : 'none';
+  $('ocgClearBtn').style.display = hasStored ? 'flex' : 'none';
+  $('ocgCookieInput').style.paddingLeft = hasStored ? '40px' : '10px';
+  $('ocgCookieInput').style.paddingRight = (hasStored || hasCookie) ? '40px' : '10px';
 }
 
 async function toggleKeyReveal() {
@@ -235,7 +295,6 @@ async function switchEndpoint(ep) {
   endpoint = ep;
   localStorage.setItem('mm_endpoint', endpoint);
   applyEndpointChrome();
-  if (endpoint === 'ocg') await refreshAgentLimitsHint();
   // Sync the selected endpoint to the backend so the background timer / tray
   // title use the same data source (otherwise the menubar keeps showing the
   // previous endpoint's state, e.g. AUTH! from an invalid Minimax key).
@@ -273,6 +332,12 @@ async function applySettings() {
     await invoke('set_api_key', { key: apiKey, endpoint: endpoint });
     keyInputDirty = false;
     keyRevealed = false;
+  }
+
+  // OpenCode Go credentials live in their own keychain items; save when the
+  // user edited either field or revealed the cookie.
+  if (endpoint === 'ocg' && (ocgDirty || ocgRevealed)) {
+    await saveOcgCreds();
   }
   refreshSec = newRefresh;
   theme = newTheme;
@@ -315,6 +380,13 @@ $('apiKeyInput').onchange = function() { if (keyInputDirty) applySettings(); };
 $('refreshSlider').oninput = function() { $('rangeVal').textContent = this.value; };
 $('refreshSlider').onchange = function() { applySettings(); };
 $('refreshIcon').onclick = function() { fetchUsage(); };
+
+$('ocgEyeBtn').onclick = toggleOcgCookieReveal;
+$('ocgClearBtn').onclick = clearOcgCreds;
+$('ocgWsInput').oninput = function() { ocgDirty = true; updateOcgCredsState(); };
+$('ocgCookieInput').oninput = function() { ocgDirty = true; updateOcgCredsState(); };
+$('ocgCookieInput').onchange = function() { if (ocgDirty) saveOcgCreds(); };
+$('ocgWsInput').onchange = function() { if (ocgDirty) saveOcgCreds(); };
 
 function updateKeyState() {
   // SEC-6-6: visual indicators depend on whether the plaintext key is in
@@ -483,31 +555,22 @@ function applyEndpointChrome() {
   w.classList.toggle('endpoint-ocg', endpoint === 'ocg');
   var keyRow = $('apiKeyInput').closest('.setting-row');
   if (keyRow) keyRow.style.display = endpoint === 'ocg' ? 'none' : '';
+  $('ocgCredsRow').style.display = endpoint === 'ocg' ? 'flex' : 'none';
   $('ocgHintRow').style.display = endpoint === 'ocg' ? 'flex' : 'none';
   if (endpoint === 'ocg') renderOcgHint();
 }
 
-// Render the ocg hint. In every case the literal `agent-limits` token is an
-// anchor to the CLI's GitHub repo (no underline until hovered); when the CLI is
-// missing we swap in a redirect message instead of "Data from ...".
+// Render the ocg hint. The `opencode.ai` token is an anchor to the dashboard
+// (no underline until hovered) so users know where to obtain the cookie.
 function renderOcgHint() {
   if (endpoint !== 'ocg') return;
   var span = $('ocgHintRow').querySelector('.ocg-hint-text');
   if (!span) return;
-  var msg = agentLimitsInstalled ? t('ocgHint') : t('ocgHintMissing');
-  span.innerHTML = msg.split(CLI_NAME).join(
-    '<a href="' + AGENT_LIMITS_URL + '" class="cli-link" target="_blank" rel="noreferrer">' + CLI_NAME + '</a>'
+  var msg = t('ocgHint');
+  var url = 'https://opencode.ai';
+  span.innerHTML = msg.split('opencode.ai').join(
+    '<a href="' + url + '" class="cli-link" target="_blank" rel="noreferrer">opencode.ai</a>'
   );
-}
-
-async function refreshAgentLimitsHint() {
-  if (endpoint !== 'ocg') return;
-  try {
-    agentLimitsInstalled = await invoke('agent_limits_installed');
-  } catch (e) {
-    agentLimitsInstalled = false;
-  }
-  renderOcgHint();
 }
 
 // The CLI link must open in the system browser (the webview won't navigate to
@@ -531,7 +594,7 @@ async function init() {
   applyLang();
   applyTheme();
   applyEndpointChrome();
-  if (endpoint === 'ocg') await refreshAgentLimitsHint();
+  if (endpoint === 'ocg') await refreshOcgCredsDisplay();
   // Sync the persisted endpoint to the backend on startup too.
   try { await invoke('set_endpoint', { ep: endpoint }); } catch(_) {}
   var tip = $('keyShieldTip');

@@ -118,6 +118,14 @@ html,body{
   font-family:monospace;user-select:text;-webkit-user-select:text;
 }
 .key-wrap input:focus{border-color:var(--text-secondary)}
+.ocg-creds{display:flex;flex-direction:column;gap:6px;flex:1;min-width:0}
+.ocg-input{
+  width:100%;height:26px;padding:0 10px;border-radius:8px;
+  border:1px solid var(--input-border);background:var(--input-bg);
+  color:var(--text-primary);font-size:11px;outline:none;font-family:monospace;
+  user-select:text;-webkit-user-select:text;
+}
+.ocg-input:focus{border-color:var(--text-secondary)}
 .key-clear{
   position:absolute;right:2px;top:50%;transform:translateY(-50%);
   width:18px;height:18px;border-radius:50%;border:none;
