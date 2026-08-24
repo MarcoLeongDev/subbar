@@ -100,8 +100,23 @@ html,body{
   display:flex;flex-direction:column;
   transform:scale(0.95);opacity:0;pointer-events:none;
   transition:all 0.25s ease;
+  /* Allow the panel to scroll when content overflows (e.g. all OCg rows on
+     the small widget). iOS-style momentum + bounce. */
+  overflow-y:auto;overflow-x:hidden;
+  -webkit-overflow-scrolling:touch;
+  overscroll-behavior:contain;
+  scrollbar-width:none;
 }
 .settings-panel.show{transform:scale(1);opacity:1;pointer-events:auto}
+/* iPhone-style minimal scrollbar: invisible until hovered or actively
+   scrolling, then a thin translucent indicator fades in. */
+.settings-panel::-webkit-scrollbar{width:0;background:transparent;transition:width .25s ease}
+.settings-panel.show:hover::-webkit-scrollbar,
+.settings-panel.scrolling::-webkit-scrollbar{width:4px}
+.settings-panel::-webkit-scrollbar-track{background:transparent}
+.settings-panel::-webkit-scrollbar-thumb{background:transparent;border-radius:3px;transition:background .3s ease}
+.settings-panel.show:hover::-webkit-scrollbar-thumb,
+.settings-panel.scrolling::-webkit-scrollbar-thumb{background:var(--text-muted)}
 
 .setting-row{
   display:flex;align-items:center;gap:8px;margin-bottom:8px;

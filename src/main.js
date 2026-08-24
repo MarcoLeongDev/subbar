@@ -19,6 +19,8 @@ var ocgWs = '';
 var ocgCookie = '';
 var ocgRevealed = false;
 var ocgDirty = false;
+var ocgHasCredentials = false;
+var ocgSaveTimer = null;
 
 function invoke(cmd, args) {
   return window.__TAURI__.core.invoke(cmd, args);
@@ -216,6 +218,7 @@ async function refreshOcgCredsDisplay() {
   ocgCookie = '';
   ocgRevealed = false;
   ocgDirty = false;
+  ocgHasCredentials = !!creds.has_credentials;
   $('ocgWsInput').value = ocgWs;
   $('ocgCookieInput').value = '';
   updateOcgCredsState();
@@ -244,6 +247,18 @@ async function saveOcgCreds() {
   ocgDirty = false;
   ocgRevealed = false;
   await refreshOcgCredsDisplay();
+  // Once both pieces are present, start pulling usage so the data shows up
+  // without the user having to manually hit refresh.
+  if (ws && cookie) fetchUsage();
+}
+
+// Debounced save while typing + immediate save when the field loses focus.
+function scheduleOcgSave() {
+  if (ocgSaveTimer) clearTimeout(ocgSaveTimer);
+  ocgSaveTimer = setTimeout(function() {
+    ocgSaveTimer = null;
+    if (ocgDirty) saveOcgCreds();
+  }, 600);
 }
 
 async function clearOcgCreds() {
@@ -257,9 +272,8 @@ async function clearOcgCreds() {
 }
 
 function updateOcgCredsState() {
-  var hasWs = !!$('ocgWsInput').value.trim();
   var hasCookie = !!$('ocgCookieInput').value.trim() || !!ocgCookie;
-  var hasStored = !!ocgWs && !!ocgCookie;
+  var hasStored = ocgHasCredentials;
   $('ocgShieldBtn').style.display = hasStored ? 'flex' : 'none';
   $('ocgEyeBtn').style.display = hasStored ? 'flex' : 'none';
   $('ocgClearBtn').style.display = hasStored ? 'flex' : 'none';
@@ -383,10 +397,26 @@ $('refreshIcon').onclick = function() { fetchUsage(); };
 
 $('ocgEyeBtn').onclick = toggleOcgCookieReveal;
 $('ocgClearBtn').onclick = clearOcgCreds;
-$('ocgWsInput').oninput = function() { ocgDirty = true; updateOcgCredsState(); };
-$('ocgCookieInput').oninput = function() { ocgDirty = true; updateOcgCredsState(); };
-$('ocgCookieInput').onchange = function() { if (ocgDirty) saveOcgCreds(); };
-$('ocgWsInput').onchange = function() { if (ocgDirty) saveOcgCreds(); };
+// Auto-save on every keystroke (debounced) and immediately when the field
+// loses focus, so credentials persist without an explicit save button.
+function onOcgInput() { ocgDirty = true; updateOcgCredsState(); scheduleOcgSave(); }
+function onOcgBlur() { if (ocgDirty || ocgRevealed) saveOcgCreds(); }
+$('ocgWsInput').addEventListener('input', onOcgInput);
+$('ocgWsInput').addEventListener('blur', onOcgBlur);
+$('ocgCookieInput').addEventListener('input', onOcgInput);
+$('ocgCookieInput').addEventListener('blur', onOcgBlur);
+
+// Reveal the minimal scrollbar only while actively scrolling (or hovered, via
+// CSS), then fade it back out.
+var settingsPanelEl = $('settingsPanel');
+var ocgScrollTimer = null;
+settingsPanelEl.addEventListener('scroll', function() {
+  settingsPanelEl.classList.add('scrolling');
+  if (ocgScrollTimer) clearTimeout(ocgScrollTimer);
+  ocgScrollTimer = setTimeout(function() {
+    settingsPanelEl.classList.remove('scrolling');
+  }, 700);
+});
 
 function updateKeyState() {
   // SEC-6-6: visual indicators depend on whether the plaintext key is in
