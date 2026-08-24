@@ -213,14 +213,23 @@ async function refreshKeyDisplay() {
 }
 
 async function refreshOcgCredsDisplay() {
-  var creds = await invoke('get_ocg_credentials', { reveal: false });
-  ocgWs = creds.workspace_id || '';
-  ocgCookie = '';
+  // Reveal:true so we can repopulate the fields from the keychain. The cookie
+  // lands in a type=password input, so it stays masked in the UI while still
+  // being restored after switching endpoints or restarting the app.
+  var creds = await invoke('get_ocg_credentials', { reveal: true });
+  ocgHasCredentials = !!creds.has_credentials;
   ocgRevealed = false;
   ocgDirty = false;
-  ocgHasCredentials = !!creds.has_credentials;
-  $('ocgWsInput').value = ocgWs;
-  $('ocgCookieInput').value = '';
+  if (ocgHasCredentials) {
+    ocgWs = creds.workspace_id || '';
+    ocgCookie = creds.auth_cookie || '';
+    $('ocgWsInput').value = ocgWs;
+    $('ocgCookieInput').value = ocgCookie;
+  } else {
+    // No stored creds yet: keep whatever the user has typed so far.
+    ocgWs = $('ocgWsInput').value.trim();
+    ocgCookie = $('ocgCookieInput').value.trim();
+  }
   updateOcgCredsState();
 }
 
@@ -244,9 +253,13 @@ async function saveOcgCreds() {
   var ws = $('ocgWsInput').value.trim();
   var cookie = $('ocgCookieInput').value.trim();
   await invoke('set_ocg_credentials', { workspace_id: ws, auth_cookie: cookie });
+  ocgWs = ws;
+  ocgCookie = cookie;
   ocgDirty = false;
   ocgRevealed = false;
-  await refreshOcgCredsDisplay();
+  ocgHasCredentials = !!(ws && cookie);
+  // Keep the typed values visible — do NOT re-fetch and wipe the inputs.
+  updateOcgCredsState();
   // Once both pieces are present, start pulling usage so the data shows up
   // without the user having to manually hit refresh.
   if (ws && cookie) fetchUsage();

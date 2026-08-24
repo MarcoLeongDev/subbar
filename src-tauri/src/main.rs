@@ -709,6 +709,7 @@ fn main() {
             let ocg_ws = load_key_from_keyring(s_ws, u_ws);
             let ocg_ck = load_key_from_keyring(s_ck, u_ck);
 
+
             {
                 let state = handle.state::<AppState>();
                 *state.api_key_com.lock().unwrap_or_else(|e| e.into_inner()) = com_key;
@@ -1017,4 +1018,19 @@ mod tests {
             assert!(!reset.is_empty(), "reset_at should be present");
         }
     }
+}
+
+#[test]
+fn ocg_keyring_round_trip() {
+    let (ws_s, ws_u) = ocg_ws_keyring();
+    let (c_s, c_u) = ocg_cookie_keyring();
+    save_key_to_keyring(ws_s, ws_u, "wstest123");
+    save_key_to_keyring(c_s, c_u, "cookietest456");
+    let loaded_ws = load_key_from_keyring(ws_s, ws_u);
+    let loaded_ck = load_key_from_keyring(c_s, c_u);
+    assert_eq!(loaded_ws, "wstest123", "ocg ws keychain write failed");
+    assert_eq!(loaded_ck, "cookietest456", "ocg cookie keychain write failed");
+    // cleanup
+    save_key_to_keyring(ws_s, ws_u, "");
+    save_key_to_keyring(c_s, c_u, "");
 }
