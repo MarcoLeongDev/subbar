@@ -203,7 +203,7 @@ async function refreshKeyDisplay() {
     return;
   }
   // SEC-6-6: default fetch returns redacted form; only the eye toggle fetches plaintext.
-  redactedKey = await invoke('get_api_key', { reveal: false });
+  redactedKey = await invoke('get_api_key', { endpoint: endpoint, reveal: false });
   $('apiKeyInput').placeholder = redactedKey || 'sk-cp-...';
   apiKey = '';
   keyRevealed = false;
@@ -326,7 +326,7 @@ async function toggleKeyReveal() {
     keyRevealed = false;
     keyInputDirty = false;
   } else {
-    apiKey = await invoke('get_api_key', { reveal: true });
+    apiKey = await invoke('get_api_key', { endpoint: endpoint, reveal: true });
     $('apiKeyInput').value = apiKey;
     keyRevealed = true;
     keyInputDirty = false;
@@ -663,7 +663,7 @@ $('ocgHintRow').addEventListener('click', function(e) {
 async function init() {
   // SEC-6-6: fetch redacted form only; plaintext never enters the webview
   // until the user clicks the eye to reveal it.
-  redactedKey = await invoke('get_api_key', { reveal: false });
+  redactedKey = await invoke('get_api_key', { endpoint: endpoint, reveal: false });
   apiKey = '';
   keyRevealed = false;
   keyInputDirty = false;

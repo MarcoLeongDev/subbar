@@ -171,30 +171,30 @@ fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+// Pick the stored API key for the given endpoint. Pure so the com/io routing is
+// unit-testable and both endpoints behave identically.
+fn select_api_key(endpoint: &str, com_key: &str, io_key: &str) -> String {
+    match endpoint {
+        "ocg" => String::new(),
+        "io" => io_key.to_string(),
+        _ => com_key.to_string(),
+    }
+}
+
 #[tauri::command]
-fn get_api_key(reveal: Option<bool>, state: tauri::State<AppState>) -> String {
-    let endpoint = state
-        .endpoint
+fn get_api_key(endpoint: String, reveal: Option<bool>, state: tauri::State<AppState>) -> String {
+    // OCG reads from the OpenCode Go credentials and has no API key of its own.
+    let com = state
+        .api_key_com
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
-    // OCG reads from the `agent-limits` CLI and has no API key of its own.
-    if endpoint == "ocg" {
-        return String::new();
-    }
-    let key = if endpoint == "io" {
-        state
-            .api_key_io
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-    } else {
-        state
-            .api_key_com
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-    };
+    let io = state
+        .api_key_io
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let key = select_api_key(&endpoint, &com, &io);
     // SEC-6-6: default to redacted so the plaintext key never enters the
     // webview unless the user explicitly clicks the eye (reveal=true).
     if reveal.unwrap_or(false) {
@@ -1117,6 +1117,16 @@ mod tests {
         assert_eq!(endpoint_keyring("com"), Some(("subbar-minimax", "subbar")));
         assert_eq!(endpoint_keyring("io"), Some(("subbar-minimaxi", "subbar")));
         assert_eq!(endpoint_keyring("ocg"), None);
+    }
+
+    #[test]
+    fn select_api_key_routes_com_io_ocg() {
+        // get_api_key must read the key for the endpoint the frontend is on, so
+        // .com and .io behave identically and independently.
+        assert_eq!(select_api_key("com", "comkey", "iokey"), "comkey");
+        assert_eq!(select_api_key("io", "comkey", "iokey"), "iokey");
+        assert_eq!(select_api_key("ocg", "comkey", "iokey"), "");
+        assert_eq!(select_api_key("unknown", "comkey", "iokey"), "comkey");
     }
 
     #[test]
