@@ -197,6 +197,12 @@ function toggleSettings() {
   }
 }
 
+// A fixed-length masked string so the password field reads as "filled" when a
+// key is stored, without leaking the secret into the DOM as readable text.
+function maskedKey() {
+  return '••••••••••••';
+}
+
 async function refreshKeyDisplay() {
   if (endpoint === 'ocg') {
     await refreshOcgCredsDisplay();
@@ -208,7 +214,11 @@ async function refreshKeyDisplay() {
   apiKey = '';
   keyRevealed = false;
   keyInputDirty = false;
-  $('apiKeyInput').value = '';
+  // SEC-6-6: fill the field with masked dots (not just a grayed placeholder
+  // hint) so it visibly reads as "filled" when a key is stored; the real key
+  // stays out of the DOM until the eye reveals it.
+  $('apiKeyInput').type = 'password';
+  $('apiKeyInput').value = redactedKey ? maskedKey() : '';
   updateKeyState();
 }
 
@@ -322,12 +332,16 @@ function updateOcgCredsState() {
 async function toggleKeyReveal() {
   if (keyRevealed) {
     apiKey = '';
-    $('apiKeyInput').value = '';
+    $('apiKeyInput').value = maskedKey();
+    $('apiKeyInput').type = 'password';
     keyRevealed = false;
     keyInputDirty = false;
   } else {
     apiKey = await invoke('get_api_key', { endpoint: endpoint, reveal: true });
     $('apiKeyInput').value = apiKey;
+    // Switch to text so the revealed key is actually visible (it was previously
+    // placed into a type=password field, so reveal was also invisible).
+    $('apiKeyInput').type = 'text';
     keyRevealed = true;
     keyInputDirty = false;
   }
@@ -379,9 +393,13 @@ async function applySettings() {
 
   if (newKey !== null) {
     apiKey = newKey;
-    redactedKey = newKey.length > 8 ? (newKey.slice(0, 4) + '...' + newKey.slice(-4)) : '[REDACTED]';
+    redactedKey = newKey === ''
+      ? ''
+      : (newKey.length > 8 ? (newKey.slice(0, 4) + '...' + newKey.slice(-4)) : '[REDACTED]');
     $('apiKeyInput').placeholder = redactedKey || 'sk-cp-...';
     await invoke('set_api_key', { key: apiKey, endpoint: endpoint });
+    $('apiKeyInput').type = 'password';
+    $('apiKeyInput').value = redactedKey ? maskedKey() : '';
     keyInputDirty = false;
     keyRevealed = false;
   }
@@ -429,6 +447,13 @@ $('apiKeyInput').oninput = function() {
   updateKeyState();
 };
 $('apiKeyInput').onchange = function() { if (keyInputDirty) applySettings(); };
+// Selecting the masked dots on focus lets the first keystroke replace them with
+// a fresh key instead of inserting characters between the dots.
+$('apiKeyInput').addEventListener('focus', function() {
+  if (!keyRevealed && $('apiKeyInput').value === maskedKey()) {
+    $('apiKeyInput').select();
+  }
+});
 $('refreshSlider').oninput = function() { $('rangeVal').textContent = this.value; };
 $('refreshSlider').onchange = function() { applySettings(); };
 $('refreshIcon').onclick = function() { fetchUsage(); };
@@ -668,6 +693,8 @@ async function init() {
   keyRevealed = false;
   keyInputDirty = false;
   $('apiKeyInput').placeholder = redactedKey || 'sk-cp-...';
+  $('apiKeyInput').type = 'password';
+  $('apiKeyInput').value = redactedKey ? maskedKey() : '';
   applyLang();
   applyTheme();
   applyEndpointChrome();
