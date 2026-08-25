@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use chrono::Utc;
 use log::{error, info, warn};
+use regex::Regex;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -266,10 +268,11 @@ fn get_ocg_credentials(reveal: Option<bool>, state: tauri::State<AppState>) -> s
     } else {
         redact_api_key(&cookie)
     };
+    let has_credentials = !ws.is_empty() && !cookie.is_empty();
     serde_json::json!({
         "workspace_id": ws,
         "auth_cookie": cookie_out,
-        "has_credentials": !ws.is_empty() && !cookie.is_empty(),
+        "has_credentials": has_credentials,
     })
 }
 
@@ -506,27 +509,138 @@ async fn fetch_quota(
     fetch_and_update(&app).await
 }
 
-// OCG (OpenCode Go) usage is fetched in-process by the vendored `agent-limits`
-// crate (no external CLI dependency). Credentials are read from the OS keychain
-// via AppState. The session cookie can be rejected/expired, so failures surface
-// as errors and the caller falls back to the `unauth` tray status.
+// OCG (OpenCode Go) usage is fetched in-process by our own HTTP client, exactly
+// like the Minimax pipeline — no external binary, no silent credential fallback.
+// Credentials come from AppState, which `set_ocg_credentials` keeps current when
+// the user saves them. If they are missing, this returns a clear error (mirroring
+// how a missing Minimax key returns an error) instead of falling back to anything.
 async fn run_agent_limits(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
-    let (ws, cookie) = {
-        let s = app.state::<AppState>();
-        let ws = s
-            .ocg_workspace_id
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let cookie = s
-            .ocg_auth_cookie
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        (ws, cookie)
-    };
-    log::debug!("fetch_ocg_quota: fetching in-process via vendored agent-limits");
-    agent_limits::usage(http_client(), &ws, &cookie).await
+    let s = app.state::<AppState>();
+    let ws = s
+        .ocg_workspace_id
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let cookie = s
+        .ocg_auth_cookie
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    fetch_ocg_usage(&ws, &cookie).await
+}
+
+const OCG_DASHBOARD_URL_TEMPLATE: &str = "https://opencode.ai/workspace/{}/go";
+const OCG_USER_AGENT: &str =
+    "agent-limits/2026.7.2 (opencodego; https://github.com/f4ah6o/agent-usage)";
+const OCG_FETCH_TIMEOUT_SECS: u64 = 10;
+
+fn re_ocg_window_block() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r#"(?:\"(rolling|weekly|monthly)\"|(rolling|weekly|monthly)Usage)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?\{([^}]*)\}"#,
+        )
+        .unwrap()
+    })
+}
+
+fn re_ocg_usage_pct() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"\"?usagePercent\"?\s*:\s*(\d+(?:\.\d+)?)"#).unwrap())
+}
+
+fn re_ocg_reset_sec() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"\"?resetInSec\"?\s*:\s*(\d+)"#).unwrap())
+}
+
+fn ocg_window_key(name: &str) -> &'static str {
+    match name {
+        "rolling" => "five_hour",
+        "weekly" => "seven_day",
+        "monthly" => "monthly",
+        _ => "unknown",
+    }
+}
+
+// Fetches OpenCode Go usage for the given workspace using the session cookie,
+// replicating the working API call directly (verified against the real endpoint).
+// Returns JSON shaped like `{ providers: { opencodego: { limits: {...} } } }` so
+// `parse_ocg_bars` can consume it unchanged.
+async fn fetch_ocg_usage(
+    workspace_id: &str,
+    auth_cookie: &str,
+) -> Result<serde_json::Value, String> {
+    if workspace_id.trim().is_empty() || auth_cookie.trim().is_empty() {
+        return Err(
+            "OpenCode Go credentials missing (workspace ID and auth cookie required)".into(),
+        );
+    }
+
+    let url = OCG_DASHBOARD_URL_TEMPLATE.replacen("{}", &workspace_id.trim(), 1);
+
+    let resp = http_client()
+        .get(&url)
+        .header("User-Agent", OCG_USER_AGENT)
+        .header("Cookie", format!("auth={}", auth_cookie.trim()))
+        .header("Accept", "text/html,application/xhtml+xml")
+        .timeout(Duration::from_secs(OCG_FETCH_TIMEOUT_SECS))
+        .send()
+        .await
+        .map_err(|e| format!("opencodego request failed: {e}"))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        return match status.as_u16() {
+            401 | 403 => Err(format!(
+                "HTTP {} from {url} — OpenCode Go auth cookie rejected; re-enter it in settings",
+                status
+            )),
+            429 | 500..=599 => Err(format!("HTTP {status} from {url} (transient)")),
+            _ => Err(format!("HTTP {status} from {url}")),
+        };
+    }
+
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("opencodego: reading response: {e}"))?;
+
+    let now = Utc::now();
+    let mut limits = serde_json::Map::new();
+    for cap in re_ocg_window_block().captures_iter(&body) {
+        let window_name = cap.get(1).or_else(|| cap.get(2)).unwrap().as_str();
+        let block = cap.get(3).unwrap().as_str();
+        let used_pct = match re_ocg_usage_pct().captures(block) {
+            Some(m) => m[1].parse::<f64>().unwrap_or(0.0),
+            None => continue,
+        };
+        let reset_sec = match re_ocg_reset_sec().captures(block) {
+            Some(m) => m[1].parse::<i64>().unwrap_or(0).max(0),
+            None => continue,
+        };
+        let key = ocg_window_key(window_name);
+        let resets_at = now + chrono::Duration::seconds(reset_sec);
+        limits.insert(
+            key.to_string(),
+            serde_json::json!({
+                "used_percent": used_pct,
+                "resets_at": resets_at.to_rfc3339(),
+            }),
+        );
+    }
+
+    if limits.is_empty() {
+        return Err("opencodego: no usage window data found in dashboard response".into());
+    }
+
+    Ok(serde_json::json!({
+        "providers": {
+            "opencodego": {
+                "limits": serde_json::Value::Object(limits)
+            }
+        }
+    }))
 }
 
 fn parse_ocg_bars(v: &serde_json::Value) -> Result<Vec<serde_json::Value>, String> {
@@ -554,7 +668,8 @@ fn parse_ocg_bars(v: &serde_json::Value) -> Result<Vec<serde_json::Value>, Strin
 #[tauri::command]
 async fn fetch_ocg_quota(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     // Mirror fetch_quota: update the tray title as well as returning the bars,
-    // so switching to ocg refreshes the menubar immediately.
+    // so switching to ocg refreshes the menubar immediately. Credentials are read
+    // from AppState, which `set_ocg_credentials` keeps current when the user saves.
     fetch_ocg_and_update(&app).await
 }
 
@@ -912,6 +1027,63 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn fetch_ocg_usage_no_creds_is_clear_error() {
+        let res = fetch_ocg_usage("", "").await;
+        let err = res.expect_err("empty creds must error, never fetch");
+        assert!(
+            err.contains("credentials missing"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_ocg_usage_blank_space_creds_is_clear_error() {
+        let res = fetch_ocg_usage("   ", "  ").await;
+        let err = res.expect_err("whitespace creds must error");
+        assert!(err.contains("credentials missing"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn fetch_ocg_usage_wrong_creds_errors() {
+        // Bogus cookie against a real-looking workspace: the dashboard returns
+        // either a login page (no windows -> error) or an auth status; in all
+        // cases the call must surface an Err, never fake usage data.
+        let res = fetch_ocg_usage(
+            "wrk_TEST0000000000000000000000",
+            "Fe26.2**definitely-invalid-session-cookie",
+        )
+        .await;
+        assert!(res.is_err(), "wrong creds must not return usage");
+    }
+
+    #[tokio::test]
+    async fn fetch_ocg_usage_valid_creds_returns_three_windows() {
+        // Requires OCG_TEST_WS / OCG_TEST_CK env vars (real creds, not committed).
+        let Ok(ws) = std::env::var("OCG_TEST_WS") else {
+            eprintln!("skipping: OCG_TEST_WS not set");
+            return;
+        };
+        let Ok(ck) = std::env::var("OCG_TEST_CK") else {
+            eprintln!("skipping: OCG_TEST_CK not set");
+            return;
+        };
+        let v = fetch_ocg_usage(&ws, &ck).await.expect("valid creds fetch");
+        let limits = v
+            .get("providers")
+            .and_then(|p| p.get("opencodego"))
+            .and_then(|o| o.get("limits"))
+            .and_then(|l| l.as_object())
+            .expect("limits object");
+        for key in ["five_hour", "seven_day", "monthly"] {
+            assert!(limits.contains_key(key), "missing window {key}");
+            let used = limits[key].get("used_percent").and_then(|x| x.as_f64());
+            assert!(used.is_some(), "{key} used_percent");
+            let reset = limits[key].get("resets_at").and_then(|x| x.as_str());
+            assert!(reset.is_some() && !reset.unwrap().is_empty(), "{key} resets_at");
+        }
+    }
 
     #[test]
     fn ocg_title_formats_three_limits() {

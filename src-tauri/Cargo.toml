@@ -1,6 +1,6 @@
 [package]
 name = "subbar"
-version = "1.0.15"
+version = "1.0.24"
 edition = "2021"
 
 [build-dependencies]
@@ -11,12 +11,13 @@ tauri = { version = "=2.11.3", features = ["tray-icon", "macos-private-api", "im
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.150"
 reqwest = { version = "=0.12.28", features = ["json", "rustls-tls"], default-features = false }
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
 tauri-plugin-liquid-glass = "=0.1.6"
 log = "=0.4.33"
 env_logger = "=0.11.11"
 keyring = { version = "=3.6.3", default-features = false }
 tokio = { version = "=1.52.3", features = ["time", "rt", "sync", "macros"] }
-agent-limits = { path = "agent-limits" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "=3.6.3", features = ["apple-native"] }

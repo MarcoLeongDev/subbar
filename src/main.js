@@ -226,9 +226,20 @@ async function refreshOcgCredsDisplay() {
     $('ocgWsInput').value = ocgWs;
     $('ocgCookieInput').value = ocgCookie;
   } else {
-    // No stored creds yet: keep whatever the user has typed so far.
-    ocgWs = $('ocgWsInput').value.trim();
-    ocgCookie = $('ocgCookieInput').value.trim();
+    // No creds in the backend yet: restore from the localStorage backup if we
+    // have one, otherwise keep whatever the user has typed so far.
+    var lws = '';
+    var lck = '';
+    try { lws = localStorage.getItem('ocg_ws') || ''; lck = localStorage.getItem('ocg_cookie') || ''; } catch (_) {}
+    if (lws || lck) {
+      $('ocgWsInput').value = lws;
+      $('ocgCookieInput').value = lck;
+      ocgWs = lws;
+      ocgCookie = lck;
+    } else {
+      ocgWs = $('ocgWsInput').value.trim();
+      ocgCookie = $('ocgCookieInput').value.trim();
+    }
   }
   updateOcgCredsState();
 }
@@ -252,7 +263,15 @@ async function toggleOcgCookieReveal() {
 async function saveOcgCreds() {
   var ws = $('ocgWsInput').value.trim();
   var cookie = $('ocgCookieInput').value.trim();
-  await invoke('set_ocg_credentials', { workspace_id: ws, auth_cookie: cookie });
+  // Tauri v2 converts Rust param names to camelCase for IPC args, so the JS
+  // must send `workspaceId`/`authCookie` to match `workspace_id`/`auth_cookie`.
+  await invoke('set_ocg_credentials', { workspaceId: ws, authCookie: cookie });
+  // Backup so the fields survive a webview reload even if the keychain write is
+  // temporarily unavailable (keychain remains the primary store).
+  try {
+    localStorage.setItem('ocg_ws', ws);
+    localStorage.setItem('ocg_cookie', cookie);
+  } catch (_) {}
   ocgWs = ws;
   ocgCookie = cookie;
   ocgDirty = false;
@@ -260,9 +279,15 @@ async function saveOcgCreds() {
   ocgHasCredentials = !!(ws && cookie);
   // Keep the typed values visible — do NOT re-fetch and wipe the inputs.
   updateOcgCredsState();
-  // Once both pieces are present, start pulling usage so the data shows up
-  // without the user having to manually hit refresh.
-  if (ws && cookie) fetchUsage();
+}
+
+// Persist whatever is currently in the OCg fields (if anything), independent of
+// the dirty flag, so an explicit refresh/save always stores entered creds even
+// if input/blur events were missed.
+async function ocgSaveIfPresent() {
+  var ws = $('ocgWsInput').value.trim();
+  var ck = $('ocgCookieInput').value.trim();
+  if (ws || ck) await saveOcgCreds();
 }
 
 // Debounced save while typing + immediate save when the field loses focus.
@@ -361,10 +386,10 @@ async function applySettings() {
     keyRevealed = false;
   }
 
-  // OpenCode Go credentials live in their own keychain items; save when the
-  // user edited either field or revealed the cookie.
-  if (endpoint === 'ocg' && (ocgDirty || ocgRevealed)) {
-    await saveOcgCreds();
+  // OpenCode Go credentials live in their own keychain items; persist whatever
+  // is in the fields when applying settings.
+  if (endpoint === 'ocg') {
+    await ocgSaveIfPresent();
   }
   refreshSec = newRefresh;
   theme = newTheme;
@@ -413,11 +438,16 @@ $('ocgClearBtn').onclick = clearOcgCreds;
 // Auto-save on every keystroke (debounced) and immediately when the field
 // loses focus, so credentials persist without an explicit save button.
 function onOcgInput() { ocgDirty = true; updateOcgCredsState(); scheduleOcgSave(); }
-function onOcgBlur() { if (ocgDirty || ocgRevealed) saveOcgCreds(); }
+// Save unconditionally on blur/change (not gated on the dirty flag) so a save
+// is guaranteed whenever the user leaves the field, mirroring minimax.
+function onOcgBlur() { ocgSaveIfPresent(); }
+function onOcgChange() { ocgSaveIfPresent(); }
 $('ocgWsInput').addEventListener('input', onOcgInput);
 $('ocgWsInput').addEventListener('blur', onOcgBlur);
+$('ocgWsInput').addEventListener('change', onOcgChange);
 $('ocgCookieInput').addEventListener('input', onOcgInput);
 $('ocgCookieInput').addEventListener('blur', onOcgBlur);
+$('ocgCookieInput').addEventListener('change', onOcgChange);
 
 // Reveal the minimal scrollbar only while actively scrolling (or hovered, via
 // CSS), then fade it back out.
@@ -475,6 +505,10 @@ async function fetchUsage() {
   // OCG endpoint reads OpenCode Go usage from the `agent-limits` CLI and has
   // no API key — bypass the key check and render 3 bars (5h / week / month).
   if (endpoint === 'ocg') {
+    // Persist whatever is in the fields (if anything) BEFORE fetching so the
+    // backend's AppState has the current credentials; the fetch command reads
+    // them from there.
+    await ocgSaveIfPresent();
     return fetchEndpointUsage('fetch_ocg_quota', buildOcgBars);
   }
 
@@ -493,7 +527,7 @@ async function fetchUsage() {
   return fetchEndpointUsage('fetch_quota', buildMinimaxBars);
 }
 
-async function fetchEndpointUsage(cmd, builder) {
+async function fetchEndpointUsage(cmd, builder, args) {
   var c = $('content');
   var hasPills = c.querySelector('.pill') !== null;
   if (!hasPills) {
@@ -506,7 +540,7 @@ async function fetchEndpointUsage(cmd, builder) {
   $('refreshSpinner').style.display = 'inline-block';
 
   try {
-    var data = await invoke(cmd);
+    var data = await invoke(cmd, args || {});
     var bars = builder(data);
     renderBars(c, bars, hasPills);
 
@@ -654,4 +688,4 @@ async function init() {
 
   try { $('appVersion').textContent = 'v' + await invoke('get_app_version'); } catch(_) {}
 }
-init();
+init().catch(function(e) { console.error('init error:', e); });
