@@ -1,5 +1,5 @@
 target/
-tests/node_modules/
+tests/
 .DS_Store
 *.log
 .env*
