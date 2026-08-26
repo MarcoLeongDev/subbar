@@ -55,6 +55,24 @@ cargo tauri build
 
 Your API key is stored in the OS native keychain/credential store (e.g. macOS Keychain), never written as plaintext to disk, and sent only over HTTPS to the selected Minimax API endpoint.
 
+### OpenCode Go (default)
+
+SubBar defaults to the **OpenCode Go** endpoint. It needs two values, both stored
+in the OS credential store:
+
+- **Workspace ID** — open your OpenCode Go dashboard at
+  `https://opencode.ai` and look at the address bar. The URL is of the form
+  `https://opencode.ai/workspace/<workspace-id>/go`; the `<workspace-id>` path
+  segment is your workspace ID.
+- **Auth token (cookie)** — this is the `auth` session cookie set when you are
+  logged into `opencode.ai`. To copy it, open your browser's developer tools
+  (e.g. **Application / Storage → Cookies → `https://opencode.ai`**), find the
+  `auth` cookie, and copy its value. The app prepends `auth=` automatically when
+  talking to the API, so paste only the cookie value.
+
+Paste the workspace ID into the `workspace id` field and the auth token into the
+`auth cookie` field in settings. Both fields show these hints when empty.
+
 ## Tech Stack
 
 - **[Tauri v2](https://tauri.app)** — Rust backend, webview frontend

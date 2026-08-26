@@ -6,7 +6,7 @@ var markOnWeek = localStorage.getItem('mm_mark_week') !== 'off';
 var markOnMonth = localStorage.getItem('mm_mark_month') !== 'off';
 var lang = localStorage.getItem('mm_lang') || 'en';
 var theme = localStorage.getItem('mm_theme') || 'dark';
-var endpoint = localStorage.getItem('mm_endpoint') || 'com';
+var endpoint = localStorage.getItem('mm_endpoint') || 'ocg';
 var settingsOpen = false;
 // SEC-6-6: apiKey holds the plaintext only after the user explicitly reveals
 // it via the eye button. Otherwise the IPC returns a redacted form.
@@ -658,7 +658,7 @@ function applyEndpointChrome() {
   var keyRow = $('apiKeyInput').closest('.setting-row');
   if (keyRow) keyRow.style.display = endpoint === 'ocg' ? 'none' : '';
   $('ocgCredsRow').style.display = endpoint === 'ocg' ? 'flex' : 'none';
-  $('ocgHintRow').style.display = endpoint === 'ocg' ? 'flex' : 'none';
+  if ($('ocgHintRow')) $('ocgHintRow').style.display = endpoint === 'ocg' ? 'flex' : 'none';
   if (endpoint === 'ocg') renderOcgHint();
 }
 
@@ -666,7 +666,9 @@ function applyEndpointChrome() {
 // (no underline until hovered) so users know where to obtain the cookie.
 function renderOcgHint() {
   if (endpoint !== 'ocg') return;
-  var span = $('ocgHintRow').querySelector('.ocg-hint-text');
+  var row = $('ocgHintRow');
+  if (!row) return;
+  var span = row.querySelector('.ocg-hint-text');
   if (!span) return;
   var msg = t('ocgHint');
   var url = 'https://opencode.ai';
@@ -677,7 +679,8 @@ function renderOcgHint() {
 
 // The CLI link must open in the system browser (the webview won't navigate to
 // a foreign URL on its own). Intercept clicks and hand the URL to Rust.
-$('ocgHintRow').addEventListener('click', function(e) {
+var ocgHintRow = $('ocgHintRow');
+if (ocgHintRow) ocgHintRow.addEventListener('click', function(e) {
   var a = e.target.closest('.cli-link');
   if (!a) return;
   e.preventDefault();

@@ -32,9 +32,9 @@
     <div class="mark-row">
       <span class="mark-label">API</span>
       <div class="segmented" id="segEndpoint">
-        <button class="seg-btn active" data-val="com" data-tauri-drag-region="false"><span class="seg-icon icon-minimax" aria-hidden="true"></span>.com</button>
+        <button class="seg-btn active" data-val="ocg" data-tauri-drag-region="false"><span class="seg-icon icon-opencode" aria-hidden="true"></span>Go</button>
+        <button class="seg-btn" data-val="com" data-tauri-drag-region="false"><span class="seg-icon icon-minimax" aria-hidden="true"></span>.com</button>
         <button class="seg-btn" data-val="io" data-tauri-drag-region="false"><span class="seg-icon icon-minimax" aria-hidden="true"></span>.io</button>
-        <button class="seg-btn" data-val="ocg" data-tauri-drag-region="false"><span class="seg-icon icon-opencode" aria-hidden="true"></span>Go</button>
       </div>
     </div>
     <div class="setting-row">
@@ -59,11 +59,7 @@
           </div>
         </div>
       </div>
-      <div class="setting-row ocg-hint-row" id="ocgHintRow" style="display:none">
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="var(--text-secondary)" class="icon-shrink" viewBox="0 0 16 16"><path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16m.93-9.412-1 4.705c-.07.34-.437.748-1.101.748-.532 0-.93-.24-1.118-.715-.146-.476.064-.834.904-1.076l1.097-.43c1.69-.654 2.366-1.62 2.282-2.77C11.428 3.928 9.84 3 8.09 3c-1.93 0-3.395.89-3.79 2.907-.083.5.203.897.728.897.43 0 .64-.282.756-.602.29-.862 1.062-1.406 2.19-1.406.953 0 1.738.52 1.82 1.39.035.39-.05.953-.638 1.415"/></svg>
-        <span class="ocg-hint-text" data-i18n="ocgHint">Enter your OpenCode Go workspace ID &amp; auth cookie</span>
-      </div>
-<div class="setting-row refresh-row">
+      <div class="setting-row refresh-row">
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="var(--text-secondary)" class="icon-shrink" viewBox="0 0 16 16"><path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41m-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9"/><path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5 5 0 0 0 8 3M3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9z"/></svg>
       <input type="range" id="refreshSlider" min="10" max="600" step="10" data-tauri-drag-region="false" title="Minimum 10s. macOS may throttle menubar updates below ~30s.">
       <span class="range-wrap"><span class="range-val" id="rangeVal">300</span><span class="range-unit" data-i18n="unit">s</span></span>
