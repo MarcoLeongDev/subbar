@@ -742,6 +742,59 @@ fn format_ocg_title(u5: u32, uw: u32, um: u32) -> String {
     format!("{}% {}% {}%", u5, uw, um)
 }
 
+// Dropdown placement math, shared by the tray-click handler and the launch
+// path so the window first appears exactly where it will live (right edge
+// aligned with the tray item, top just below it) instead of flashing at the
+// default centered position. Tray rect values are physical pixels; `win_w` is
+// the window width in physical pixels.
+fn compute_dropdown_xy(
+    tray_pos: tauri::PhysicalPosition<i32>,
+    tray_size: tauri::PhysicalSize<u32>,
+    win_w: f64,
+    screen_w: f64,
+    y_gap: f64,
+) -> tauri::PhysicalPosition<f64> {
+    let mut x = tray_pos.x as f64 + tray_size.width as f64 - win_w;
+    x = x.clamp(0.0, (screen_w - win_w).max(0.0));
+    let y = tray_pos.y as f64 + tray_size.height as f64 + y_gap;
+    tauri::PhysicalPosition::new(x, y)
+}
+
+fn compute_dropdown_position(
+    tray_rect: &tauri::Rect,
+    window: &tauri::WebviewWindow,
+) -> tauri::PhysicalPosition<f64> {
+    let pos = match tray_rect.position {
+        tauri::Position::Physical(p) => p,
+        _ => {
+            warn!("Tray returned non-physical position");
+            return window
+                .outer_position()
+                .map(|p| tauri::PhysicalPosition::new(p.x as f64, p.y as f64))
+                .unwrap_or(tauri::PhysicalPosition::new(0.0, 0.0));
+        }
+    };
+    let sz = match tray_rect.size {
+        tauri::Size::Physical(s) => s,
+        _ => {
+            warn!("Tray returned non-physical size");
+            return window
+                .outer_position()
+                .map(|p| tauri::PhysicalPosition::new(p.x as f64, p.y as f64))
+                .unwrap_or(tauri::PhysicalPosition::new(0.0, 0.0));
+        }
+    };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let win_w = WIDGET_OUTER_WIDTH * scale;
+    let screen_w = window
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| m.size().width as f64)
+        .unwrap_or(win_w);
+    compute_dropdown_xy(pos, sz, win_w, screen_w, 4.0 * scale)
+}
+
 fn apply_liquid_glass(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
     let glass = app.liquid_glass();
     if !glass.is_supported() {
@@ -861,7 +914,7 @@ fn main() {
             .resizable(false)
             .decorations(false)
             .transparent(true)
-            .visible(true)
+            .visible(false)
             .always_on_top(true)
             .build()
             .expect("failed to create window");
@@ -882,6 +935,65 @@ fn main() {
             }
 
             apply_liquid_glass(&handle, &window);
+
+            // Place the dropdown under the tray icon right from launch so it
+            // never flashes at the default centered position. The status item
+            // may not be laid out yet at startup, so if the tray has no rect
+            // yet, poll briefly and only show the window once it is positioned
+            // (with an always-show fallback so the app is never left hidden).
+            {
+                let placement_tray = handle.tray_by_id("main-tray");
+                let placement_window = window.clone();
+                tauri::async_runtime::spawn(async move {
+                    let placed = match placement_tray
+                        .as_ref()
+                        .and_then(|t| t.rect().ok().flatten())
+                    {
+                        Some(rect) => {
+                            let has_size = match rect.size {
+                                tauri::Size::Physical(s) => s.width > 0 && s.height > 0,
+                                _ => false,
+                            };
+                            has_size
+                                && placement_window
+                                    .set_position(compute_dropdown_position(
+                                        &rect,
+                                        &placement_window,
+                                    ))
+                                    .is_ok()
+                        }
+                        None => false,
+                    };
+                    if !placed {
+                        let Some(tray) = placement_tray else {
+                            let _ = placement_window.show();
+                            return;
+                        };
+                        for _ in 0..60 {
+                            time::sleep(Duration::from_millis(100)).await;
+                            if let Ok(Some(rect)) = tray.rect() {
+                                let has_size = match rect.size {
+                                    tauri::Size::Physical(s) => s.width > 0 && s.height > 0,
+                                    _ => false,
+                                };
+                                if has_size {
+                                    let pos =
+                                        compute_dropdown_position(&rect, &placement_window);
+                                    if placement_window.set_position(pos).is_ok() {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if let Err(e) = placement_window.show() {
+                        error!("Failed to show window at launch: {e}");
+                    }
+                    if let Err(e) = placement_window.set_focus() {
+                        warn!("Failed to focus window at launch: {e}");
+                    }
+                });
+            }
 
             {
                 let handle_clone = handle.clone();
@@ -916,43 +1028,8 @@ fn main() {
                                 if window.is_visible().unwrap_or(false) {
                                     let _ = window.hide();
                                 } else if let Some(rect) = tray_rect {
-                                    let pos = match rect.position {
-                                        tauri::Position::Physical(p) => p,
-                                        _ => {
-                                            warn!("Tray returned non-physical position");
-                                            return;
-                                        }
-                                    };
-                                    let sz = match rect.size {
-                                        tauri::Size::Physical(s) => s,
-                                        _ => {
-                                            warn!("Tray returned non-physical size");
-                                            return;
-                                        }
-                                    };
-                                    let scale = match window.scale_factor() {
-                                        Ok(s) => s,
-                                        Err(e) => {
-                                            warn!(
-                                                "Failed to get window scale factor: {e}, using 1.0"
-                                            );
-                                            1.0
-                                        }
-                                    };
-                                    let win_w = WIDGET_OUTER_WIDTH * scale;
-
-                                    let mut x = pos.x as f64 + sz.width as f64 - win_w;
-
-                                    if let Some(monitor) = window.primary_monitor().ok().flatten() {
-                                        let screen_w = monitor.size().width as f64;
-                                        x = x.clamp(0.0, screen_w - win_w);
-                                    }
-
-                                    let y = pos.y as f64 + sz.height as f64 + 4.0 * scale;
-
-                                    if let Err(e) =
-                                        window.set_position(tauri::PhysicalPosition::new(x, y))
-                                    {
+                                    let pos = compute_dropdown_position(&rect, &window);
+                                    if let Err(e) = window.set_position(pos) {
                                         error!("Failed to set window position: {e}");
                                     }
                                     apply_liquid_glass(&app, &window);
@@ -1199,6 +1276,57 @@ mod tests {
             let reset = b.get("reset_at").and_then(|x| x.as_str()).unwrap_or("");
             assert!(!reset.is_empty(), "reset_at should be present");
         }
+    }
+
+    #[test]
+    fn dropdown_xy_aligns_right_edge_with_tray_and_sits_below_it() {
+        // 2x Retina: tray at x=1800 (width 24, height 24, top y=30); window
+        // 212 logical px -> 424 physical px. Right edge should align with the
+        // tray's right edge and the top should sit just below the tray.
+        let pos = compute_dropdown_xy(
+            tauri::PhysicalPosition::new(1800, 30),
+            tauri::PhysicalSize::new(24, 24),
+            424.0,
+            3024.0,
+            8.0,
+        );
+        assert_eq!(pos.x, 1800.0 + 24.0 - 424.0);
+        assert_eq!(pos.y, 30.0 + 24.0 + 8.0);
+    }
+
+    #[test]
+    fn dropdown_xy_clamps_to_screen_edges() {
+        // Tray on the far left: the window right edge would overshoot the left
+        // screen edge, so x must clamp to 0.
+        let pos = compute_dropdown_xy(
+            tauri::PhysicalPosition::new(0, 24),
+            tauri::PhysicalSize::new(24, 24),
+            424.0,
+            3024.0,
+            8.0,
+        );
+        assert_eq!(pos.x, 0.0);
+        // Tray on the far right: the window must not extend past the screen.
+        let pos = compute_dropdown_xy(
+            tauri::PhysicalPosition::new(3024 - 24, 24),
+            tauri::PhysicalSize::new(24, 24),
+            424.0,
+            3024.0,
+            8.0,
+        );
+        assert_eq!(pos.x, 3024.0 - 424.0);
+    }
+
+    #[test]
+    fn dropdown_xy_never_goes_negative_when_window_wider_than_screen() {
+        let pos = compute_dropdown_xy(
+            tauri::PhysicalPosition::new(0, 24),
+            tauri::PhysicalSize::new(24, 24),
+            500.0,
+            400.0,
+            8.0,
+        );
+        assert_eq!(pos.x, 0.0);
     }
 }
 
