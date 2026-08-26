@@ -1,44 +1,45 @@
-# SubBar (Subscription Bar)
+# SubBar
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 
-A macOS menu bar app that monitors your API subscription / quota usage at a
-glance — across Minimax (`.com` / `.io`) and OpenCode Go.
+A lightweight macOS menu bar app that shows your API subscription / quota usage
+at a glance — for **Minimax** (`.com` / `.io`) and **OpenCode Go**.
 
-Shows the 5h interval quota percentage directly in the menu bar tray. Click to reveal a widget panel with detailed usage bars and settings.
+The 5h interval usage percentage is shown directly in the menu bar tray. Click
+the tray icon to open the widget panel with detailed usage bars and settings.
 
 <img src="logo-sm.png" width="64" alt="SubBar">
 
-> The README screenshot uses `logo-sm.png` from the repo root. The same image
-> is also bundled as `src/logo-sm.png` for the in-app icon. When updating the
-> logo, keep both copies identical.
+> The README logo uses `logo-sm.png` from the repo root; the same image is
+> bundled as `src/logo-sm.png` for the in-app icon. Keep both copies identical
+> when updating the logo.
 
 ## Features
 
-- **Menu bar tray label** — displays 5h interval usage as `X%`
-- **Widget panel** — at-a-glance quota bars: 5h interval, weekly interval, limits
-- **Liquid Glass** — native frosted glass effect on macOS 26+ Tahoe
+- **Menu bar tray label** — live 5h usage as `X%`
+- **Widget panel** — at-a-glance quota bars: 5h interval, weekly, monthly (OpenCode Go)
+- **Liquid Glass** — native frosted glass effect on macOS 26+ (Tahoe)
 - **Dark / Light theme** — auto-detection with manual toggle
-- **Secure API key** — stored in the OS native credential store (macOS Keychain, Windows Credential Manager, Linux Secret Service) via the `keyring` crate; no plaintext on disk
+- **Secure credentials** — API keys, workspace IDs, and auth cookies stored in the OS native credential store (macOS Keychain) via the `keyring` crate; no plaintext on disk
 - **Auto-refresh** — polls every 5 minutes; configurable refresh interval
 - **24h time format** — clean timestamp display
 
-## Screenshot
-
-<img src="logo-sm.png" width="192" alt="SubBar menubar widget showing 5h and weekly quota bars">
-
 ## Requirements
 
-- macOS 11.0 or later (currently the only platform tested for releases — Liquid Glass effect requires macOS 26+ Tahoe)
-- Minimax API key ([get one here](https://platform.minimaxi.com))
+- macOS 11.0 or later (Liquid Glass effect requires macOS 26+ Tahoe)
+- A Minimax API key ([get one here](https://platform.minimaxi.com)) or OpenCode Go credentials
 
-> **Platform scope:** the codebase is structured to support Windows and Linux (cross-platform `keyring` features in `Cargo.toml`), but release artifacts and runtime testing are currently macOS-only. Windows/Linux builds are not produced and may require additional testing before publishing.
+> **Platform scope:** the codebase supports Windows and Linux (cross-platform
+> `keyring` features in `Cargo.toml`), but release artifacts and runtime testing
+> are currently macOS-only.
 
 ## Install
 
-Download the latest `.dmg` from this repository's Releases page and drag `SubBar.app` to your Applications folder.
+Download the latest `.dmg` from the Releases page and drag `SubBar.app` to your
+Applications folder.
 
-Or build from the repository root:
+Or build from source:
 
 ```bash
 cargo tauri build
@@ -50,35 +51,40 @@ cargo tauri build
 1. Launch the app — a `--` icon appears in your menu bar
 2. Click the tray icon to open the panel
 3. Click the gear icon to open settings
-4. Paste your Minimax API key (`sk-cp-...`)
+4. Enter your credentials (see below)
 5. Close settings — the tray label updates automatically
 
-Your API key is stored in the OS native keychain/credential store (e.g. macOS Keychain), never written as plaintext to disk, and sent only over HTTPS to the selected Minimax API endpoint.
+All credentials are stored in the OS keychain/credential store (e.g. macOS
+Keychain), never written as plaintext to disk, and sent only over HTTPS to the
+selected API endpoint.
 
 ### OpenCode Go (default)
 
-SubBar defaults to the **OpenCode Go** endpoint. It needs two values, both stored
-in the OS credential store:
+SubBar defaults to the **OpenCode Go** endpoint. It needs two values:
 
-- **Workspace ID** — open your OpenCode Go dashboard at
-  `https://opencode.ai` and look at the address bar. The URL is of the form
+- **Workspace ID** — open your OpenCode Go dashboard at `https://opencode.ai`
+  and look at the address bar. The URL has the form
   `https://opencode.ai/workspace/<workspace-id>/go`; the `<workspace-id>` path
   segment is your workspace ID.
-- **Auth token (cookie)** — this is the `auth` session cookie set when you are
-  logged into `opencode.ai`. To copy it, open your browser's developer tools
+- **Auth token (cookie)** — the `auth` session cookie set when you are logged
+  into `opencode.ai`. To copy it, open your browser's developer tools
   (e.g. **Application / Storage → Cookies → `https://opencode.ai`**), find the
-  `auth` cookie, and copy its value. The app prepends `auth=` automatically when
-  talking to the API, so paste only the cookie value.
+  `auth` cookie, and copy its value. The app prepends `auth=` automatically, so
+  paste only the cookie value.
 
 Paste the workspace ID into the `workspace id` field and the auth token into the
-`auth cookie` field in settings. Both fields show these hints when empty.
+`auth cookie` field in settings — both fields show these hints when empty.
+
+### Minimax
+
+Select `.com` or `.io` in settings and paste your Minimax API key (`sk-cp-...`).
 
 ## Tech Stack
 
 - **[Tauri v2](https://tauri.app)** — Rust backend, webview frontend
-- **[tauri-plugin-liquid-glass](https://crates.io/crates/tauri-plugin-liquid-glass)** — Native `NSGlassEffectView` / `NSVisualEffectView`
+- **[tauri-plugin-liquid-glass](https://crates.io/crates/tauri-plugin-liquid-glass)** — native `NSGlassEffectView` / `NSVisualEffectView`
 - **Vanilla HTML/CSS/JS** — no framework, no build step
-- **[reqwest](https://crates.io/crates/reqwest)** — HTTP client for Minimax API
+- **[reqwest](https://crates.io/crates/reqwest)** — HTTP client for Minimax / OpenCode Go
 
 ## Development
 
@@ -91,35 +97,27 @@ cargo run
 cargo tauri build
 ```
 
-Window is created programmatically in `main.rs` — no window defined in `tauri.conf.json`.
+The window is created programmatically in `main.rs` — no window is defined in
+`tauri.conf.json`.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for the full security policy and posture
+(credential storage, network, CSP, and dependency auditing).
+
+## Verifying releases
+
+Each GitHub Release is produced from a tagged commit on `main`:
+
+```bash
+git checkout v1.0.0
+cargo tauri build --bundles app
+shasum -a 256 "src-tauri/target/release/bundle/macos/SubBar.app"
+```
+
+> The `.dmg` is not Apple-notarized. After installing, right-click `SubBar.app`
+> in `/Applications` and choose **Open** the first time to bypass Gatekeeper.
 
 ## License
 
 MIT — see [LICENSE](LICENSE)
-
-## Verifying releases
-
-Each GitHub Release is produced from a tagged commit on `main`. To verify a
-release:
-
-```bash
-# 1. Confirm the released source tarball matches the tag
-git checkout v1.0.0
-git diff <downloaded-tarball>
-
-# 2. In a fresh clone of this repository, reproduce the build (macOS only)
-git checkout v1.0.0
-cargo tauri build --bundles app
-# Result: src-tauri/target/release/bundle/macos/SubBar.app
-# Compare SHA-256 against the maintainer's published SHA-256SUMS file
-shasum -a 256 "src-tauri/target/release/bundle/macos/SubBar.app"
-```
-
-The `.dmg` shipped via GitHub Releases is not Apple-notarized. After
-installing, right-click `SubBar.app` in `/Applications` and choose
-**Open** the first time to bypass Gatekeeper.
-
-> **Note:** the build host's toolchain versions affect the binary's
-> fingerprint. A byte-identical reproduction requires the same `rustc`,
-> `cargo-tauri`, macOS SDK, and linker versions. The intent of the
-> instructions above is source-comparability, not byte-reproducibility.
