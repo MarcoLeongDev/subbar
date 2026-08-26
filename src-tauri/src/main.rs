@@ -268,9 +268,18 @@ fn get_ocg_credentials(reveal: Option<bool>, state: tauri::State<AppState>) -> s
     } else {
         redact_api_key(&cookie)
     };
+    // SEC: the workspace ID is a secret (treated like the cookie/API key). Redact
+    // it in the default response; only return plaintext when explicitly revealed.
+    let ws_out = if reveal.unwrap_or(false) {
+        ws.clone()
+    } else if ws.is_empty() {
+        String::new()
+    } else {
+        redact_api_key(&ws)
+    };
     let has_credentials = !ws.is_empty() && !cookie.is_empty();
     serde_json::json!({
-        "workspace_id": ws,
+        "workspace_id": ws_out,
         "auth_cookie": cookie_out,
         "has_credentials": has_credentials,
     })
@@ -578,6 +587,9 @@ async fn fetch_ocg_usage(
     }
 
     let url = OCG_DASHBOARD_URL_TEMPLATE.replacen("{}", &workspace_id.trim(), 1);
+    // The workspace ID is a secret that ends up in the URL path. Build a
+    // redacted copy for any log/error message so it never leaks in logs.
+    let safe_url = url.replace(workspace_id.trim(), "[REDACTED]");
 
     let resp = http_client()
         .get(&url)
@@ -593,11 +605,11 @@ async fn fetch_ocg_usage(
     if !status.is_success() {
         return match status.as_u16() {
             401 | 403 => Err(format!(
-                "HTTP {} from {url} — OpenCode Go auth cookie rejected; re-enter it in settings",
+                "HTTP {} from {safe_url} — OpenCode Go auth cookie rejected; re-enter it in settings",
                 status
             )),
-            429 | 500..=599 => Err(format!("HTTP {status} from {url} (transient)")),
-            _ => Err(format!("HTTP {status} from {url}")),
+            429 | 500..=599 => Err(format!("HTTP {status} from {safe_url} (transient)")),
+            _ => Err(format!("HTTP {status} from {safe_url}")),
         };
     }
 

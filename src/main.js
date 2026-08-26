@@ -233,23 +233,14 @@ async function refreshOcgCredsDisplay() {
   if (ocgHasCredentials) {
     ocgWs = creds.workspace_id || '';
     ocgCookie = creds.auth_cookie || '';
+    $('ocgWsInput').type = 'password';
     $('ocgWsInput').value = ocgWs;
     $('ocgCookieInput').value = ocgCookie;
   } else {
-    // No creds in the backend yet: restore from the localStorage backup if we
-    // have one, otherwise keep whatever the user has typed so far.
-    var lws = '';
-    var lck = '';
-    try { lws = localStorage.getItem('ocg_ws') || ''; lck = localStorage.getItem('ocg_cookie') || ''; } catch (_) {}
-    if (lws || lck) {
-      $('ocgWsInput').value = lws;
-      $('ocgCookieInput').value = lck;
-      ocgWs = lws;
-      ocgCookie = lck;
-    } else {
-      ocgWs = $('ocgWsInput').value.trim();
-      ocgCookie = $('ocgCookieInput').value.trim();
-    }
+    // No creds in the keychain: keep whatever the user has typed so far.
+    // (We no longer read a plaintext localStorage backup — see saveOcgCreds.)
+    ocgWs = $('ocgWsInput').value.trim();
+    ocgCookie = $('ocgCookieInput').value.trim();
   }
   updateOcgCredsState();
 }
@@ -276,12 +267,10 @@ async function saveOcgCreds() {
   // Tauri v2 converts Rust param names to camelCase for IPC args, so the JS
   // must send `workspaceId`/`authCookie` to match `workspace_id`/`auth_cookie`.
   await invoke('set_ocg_credentials', { workspaceId: ws, authCookie: cookie });
-  // Backup so the fields survive a webview reload even if the keychain write is
-  // temporarily unavailable (keychain remains the primary store).
-  try {
-    localStorage.setItem('ocg_ws', ws);
-    localStorage.setItem('ocg_cookie', cookie);
-  } catch (_) {}
+  // SEC: OCG credentials (workspace ID + auth cookie) are secrets. The keychain
+  // is the single source of truth — we deliberately do NOT mirror them into
+  // plaintext localStorage (unlike an earlier backup), mirroring the Minimax
+  // API key which also lives only in the OS credential store.
   ocgWs = ws;
   ocgCookie = cookie;
   ocgDirty = false;
