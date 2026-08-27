@@ -1,129 +1,81 @@
-# SubBar
+# SubBar 🍺
+
+> Your API quota, right in the menu bar — so you never have to open a dashboard again.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
+![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
+![Version](https://img.shields.io/badge/version-v1.0.31-blue)
 
-A lightweight macOS menu bar app that shows your API subscription / quota usage
-at a glance — for **Minimax** (`.com` / `.io`) and **OpenCode Go**.
+A tiny macOS menu-bar app that watches your subscription / quota usage for
+**Minimax** (`.com` / `.io`) and **OpenCode Go**. One click. One glance. Done.
 
-The 5h interval usage percentage is shown directly in the menu bar tray. Click
-the tray icon to open the widget panel with detailed usage bars and settings.
+<img src="logo-sm.png" width="80" alt="SubBar">
 
-<img src="logo-sm.png" width="64" alt="SubBar">
+---
 
-> The README logo uses `logo-sm.png` from the repo root; the same image is
-> bundled as `src/logo-sm.png` for the in-app icon. Keep both copies identical
-> when updating the logo.
+## ✨ At a glance
 
-## Features
+| | |
+|---|---|
+| 🧲 **Menu-bar ticker** | live 5h usage as `X%`, always visible |
+| 📊 **Usage bars** | 5h / week / month quotas at a glance |
+| 🪟 **Liquid Glass** | native macOS 26 glass, very pretty |
+| 🌗 **Dark / light** | auto-detected, manually toggleable |
+| 🔐 **Keychain-safe** | keys, workspace IDs & cookies — never plaintext on disk |
+| ⏱️ **Auto-refresh** | every 5 min (configurable) |
 
-- **Menu bar tray label** — live 5h usage as `X%`
-- **Widget panel** — at-a-glance quota bars: 5h interval, weekly, monthly (OpenCode Go)
-- **Liquid Glass** — native frosted glass effect on macOS 26+ (Tahoe)
-- **Dark / Light theme** — auto-detection with manual toggle
-- **Secure credentials** — API keys, workspace IDs, and auth cookies stored in the OS native credential store (macOS Keychain) via the `keyring` crate; no plaintext on disk
-- **Auto-refresh** — polls every 5 minutes; configurable refresh interval
-- **24h time format** — clean timestamp display
+---
 
-## Requirements
+## 🚀 Quickstart
 
-- macOS 11.0 or later (Liquid Glass effect requires macOS 26+ Tahoe)
-- A Minimax API key ([get one here](https://platform.minimaxi.com)) or OpenCode Go credentials
+1. **Install** — grab the `.dmg` from **Releases**, drag `SubBar.app` to `/Applications`,
+   then right-click → **Open** on first launch (macOS Gatekeeper, totally normal).
+2. **Run** — a `--` icon appears in the menu bar. Click it → gear ⚙️.
+3. **Pick a side** — **OpenCode Go** is the default; or switch to Minimax `.com` / `.io`.
+4. **Paste your secrets** — see the table below.
+5. **Done.** Close settings and the tray starts doing its thing.
 
-> **Platform scope:** the codebase supports Windows and Linux (cross-platform
-> `keyring` features in `Cargo.toml`), but release artifacts and runtime testing
-> are currently macOS-only.
+---
 
-## Install
+## 🔑 Where to find your credentials
 
-Download the latest `.dmg` from the Releases page and drag `SubBar.app` to your
-Applications folder.
+| Endpoint | You need | Where to get it |
+|---------|---------|-----------------|
+| **OpenCode Go**<br>(default) | **Workspace ID** | Your dashboard URL: `opencode.ai/workspace/<workspace-id>/go` — the `<workspace-id>` bit. |
+| | **Auth token** | Browser devtools → **Cookies → `opencode.ai`** → copy the `auth` cookie value. |
+| **Minimax** | **API key** (`sk-…`) | [platform.minimaxi.com](https://platform.minimaxi.com) (or `platform.minimax.io` for international). |
 
-Or build from source:
+All credentials live in the OS keychain and travel only over HTTPS.
+
+---
+
+## 📦 Install & build
 
 ```bash
-cargo tauri build
-# App bundle at src-tauri/target/release/bundle/macos/SubBar.app
+# Download the .dmg from the Releases page, or:
+cargo tauri build          # app lands in src-tauri/target/release/bundle/macos/
 ```
 
-## Quickstart
-
-1. **Install** — grab the latest `.dmg` from the Releases page, drag `SubBar.app`
-   into your `/Applications` folder, then right-click → **Open** the first time
-   (macOS Gatekeeper).
-2. **Launch** — a `--` icon appears in your menu bar. Click it to open the panel,
-   then click the gear icon to open settings.
-3. **Pick an endpoint** — **OpenCode Go** is the default; or choose `.com` / `.io`
-   for Minimax.
-4. **Enter your credentials** — see *Where to find your credentials* below.
-5. **Done** — close settings and the tray label updates automatically.
-
-All credentials are stored in the OS keychain (macOS Keychain) via the `keyring`
-crate — never written as plaintext to disk, and sent only over HTTPS to the
-selected endpoint.
-
-### Where to find your credentials
-
-**OpenCode Go (default)** — needs a *workspace ID* and an *auth token*:
-
-- **Workspace ID** — sign in to `https://opencode.ai`, open your dashboard, and
-  read the address bar. The URL looks like
-  `https://opencode.ai/workspace/<workspace-id>/go`; the `<workspace-id>` segment
-  is your workspace ID.
-- **Auth token (cookie)** — while logged into `opencode.ai`, open your browser
-  developer tools (**Application / Storage → Cookies → `https://opencode.ai`**),
-  find the `auth` cookie, and copy its value. The app sends it as `auth=…`
-  automatically, so paste only the cookie value.
-
-Paste the workspace ID into the `workspace id` field and the token into the
-`auth cookie` field — both fields show these hints when empty.
-
-**Minimax** — needs an API key (`sk-cp-…`):
-
-- **API key** — create/get one from your Minimax dashboard:
-  `https://platform.minimaxi.com` (or `https://platform.minimax.io` for the
-  international endpoint). Paste it into the API key field after selecting
-  `.com` or `.io`.
-
-## Tech Stack
-
-- **[Tauri v2](https://tauri.app)** — Rust backend, webview frontend
-- **[tauri-plugin-liquid-glass](https://crates.io/crates/tauri-plugin-liquid-glass)** — native `NSGlassEffectView` / `NSVisualEffectView`
-- **Vanilla HTML/CSS/JS** — no framework, no build step
-- **[reqwest](https://crates.io/crates/reqwest)** — HTTP client for Minimax / OpenCode Go
-
-## Development
+## 🛠️ Development
 
 ```bash
-# Run in dev mode
 cd src-tauri
-cargo run
-
-# Build release bundle
-cargo tauri build
+cargo run                 # dev mode
+cargo tauri build         # release bundle
 ```
 
-The window is created programmatically in `main.rs` — no window is defined in
-`tauri.conf.json`.
+## 🧰 Tech stack
 
-## Security
+**Tauri v2** · **Rust** · vanilla HTML/CSS/JS · **reqwest** · **keyring**
 
-See [SECURITY.md](SECURITY.md) for the full security policy and posture
-(credential storage, network, CSP, and dependency auditing).
+---
 
-## Verifying releases
+## 🔒 Security
 
-Each GitHub Release is produced from a tagged commit on `main`:
+Credentials are stored in the OS native credential store (macOS Keychain), sent
+only over HTTPS, and never written as plaintext to disk. Full posture →
+[SECURITY.md](SECURITY.md).
 
-```bash
-git checkout v1.0.0
-cargo tauri build --bundles app
-shasum -a 256 "src-tauri/target/release/bundle/macos/SubBar.app"
-```
-
-> The `.dmg` is not Apple-notarized. After installing, right-click `SubBar.app`
-> in `/Applications` and choose **Open** the first time to bypass Gatekeeper.
-
-## License
+## 📄 License
 
 MIT — see [LICENSE](LICENSE)
