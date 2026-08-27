@@ -46,38 +46,44 @@ cargo tauri build
 # App bundle at src-tauri/target/release/bundle/macos/SubBar.app
 ```
 
-## Setup
+## Quickstart
 
-1. Launch the app — a `--` icon appears in your menu bar
-2. Click the tray icon to open the panel
-3. Click the gear icon to open settings
-4. Enter your credentials (see below)
-5. Close settings — the tray label updates automatically
+1. **Install** — grab the latest `.dmg` from the Releases page, drag `SubBar.app`
+   into your `/Applications` folder, then right-click → **Open** the first time
+   (macOS Gatekeeper).
+2. **Launch** — a `--` icon appears in your menu bar. Click it to open the panel,
+   then click the gear icon to open settings.
+3. **Pick an endpoint** — **OpenCode Go** is the default; or choose `.com` / `.io`
+   for Minimax.
+4. **Enter your credentials** — see *Where to find your credentials* below.
+5. **Done** — close settings and the tray label updates automatically.
 
-All credentials are stored in the OS keychain/credential store (e.g. macOS
-Keychain), never written as plaintext to disk, and sent only over HTTPS to the
-selected API endpoint.
+All credentials are stored in the OS keychain (macOS Keychain) via the `keyring`
+crate — never written as plaintext to disk, and sent only over HTTPS to the
+selected endpoint.
 
-### OpenCode Go (default)
+### Where to find your credentials
 
-SubBar defaults to the **OpenCode Go** endpoint. It needs two values:
+**OpenCode Go (default)** — needs a *workspace ID* and an *auth token*:
 
-- **Workspace ID** — open your OpenCode Go dashboard at `https://opencode.ai`
-  and look at the address bar. The URL has the form
-  `https://opencode.ai/workspace/<workspace-id>/go`; the `<workspace-id>` path
-  segment is your workspace ID.
-- **Auth token (cookie)** — the `auth` session cookie set when you are logged
-  into `opencode.ai`. To copy it, open your browser's developer tools
-  (e.g. **Application / Storage → Cookies → `https://opencode.ai`**), find the
-  `auth` cookie, and copy its value. The app prepends `auth=` automatically, so
-  paste only the cookie value.
+- **Workspace ID** — sign in to `https://opencode.ai`, open your dashboard, and
+  read the address bar. The URL looks like
+  `https://opencode.ai/workspace/<workspace-id>/go`; the `<workspace-id>` segment
+  is your workspace ID.
+- **Auth token (cookie)** — while logged into `opencode.ai`, open your browser
+  developer tools (**Application / Storage → Cookies → `https://opencode.ai`**),
+  find the `auth` cookie, and copy its value. The app sends it as `auth=…`
+  automatically, so paste only the cookie value.
 
-Paste the workspace ID into the `workspace id` field and the auth token into the
-`auth cookie` field in settings — both fields show these hints when empty.
+Paste the workspace ID into the `workspace id` field and the token into the
+`auth cookie` field — both fields show these hints when empty.
 
-### Minimax
+**Minimax** — needs an API key (`sk-cp-…`):
 
-Select `.com` or `.io` in settings and paste your Minimax API key (`sk-cp-...`).
+- **API key** — create/get one from your Minimax dashboard:
+  `https://platform.minimaxi.com` (or `https://platform.minimax.io` for the
+  international endpoint). Paste it into the API key field after selecting
+  `.com` or `.io`.
 
 ## Tech Stack
 
