@@ -408,7 +408,6 @@ async function applySettings() {
   localStorage.setItem('mm_theme', theme);
   lang = newLang;
   applyLang();
-  renderOcgHint();
   applyTheme();
 
   if (langChanged || themeChanged) $('content').textContent = '';
@@ -647,35 +646,7 @@ function applyEndpointChrome() {
   var keyRow = $('apiKeyInput').closest('.setting-row');
   if (keyRow) keyRow.style.display = endpoint === 'ocg' ? 'none' : '';
   $('ocgCredsRow').style.display = endpoint === 'ocg' ? 'flex' : 'none';
-  if ($('ocgHintRow')) $('ocgHintRow').style.display = endpoint === 'ocg' ? 'flex' : 'none';
-  if (endpoint === 'ocg') renderOcgHint();
 }
-
-// Render the ocg hint. The `opencode.ai` token is an anchor to the dashboard
-// (no underline until hovered) so users know where to obtain the cookie.
-function renderOcgHint() {
-  if (endpoint !== 'ocg') return;
-  var row = $('ocgHintRow');
-  if (!row) return;
-  var span = row.querySelector('.ocg-hint-text');
-  if (!span) return;
-  var msg = t('ocgHint');
-  var url = 'https://opencode.ai';
-  span.innerHTML = msg.split('opencode.ai').join(
-    '<a href="' + url + '" class="cli-link" target="_blank" rel="noreferrer">opencode.ai</a>'
-  );
-}
-
-// The CLI link must open in the system browser (the webview won't navigate to
-// a foreign URL on its own). Intercept clicks and hand the URL to Rust.
-var ocgHintRow = $('ocgHintRow');
-if (ocgHintRow) ocgHintRow.addEventListener('click', function(e) {
-  var a = e.target.closest('.cli-link');
-  if (!a) return;
-  e.preventDefault();
-  var url = a.getAttribute('href');
-  invoke('open_external', { url: url }).catch(function() {});
-});
 
 async function init() {
   // SEC-6-6: fetch redacted form only; plaintext never enters the webview

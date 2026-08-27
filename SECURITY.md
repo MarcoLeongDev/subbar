@@ -13,7 +13,7 @@ We aim to acknowledge reports within 72 hours.
 
 | Version | Status |
 | ------- | ------ |
-| 1.0.0  | Current |
+| 1.0.30  | Current |
 
 ## Security Posture
 
