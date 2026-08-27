@@ -28,8 +28,10 @@ A tiny macOS menu-bar app that watches your subscription / quota usage for
 
 ## 🚀 Quickstart
 
-1. **Install** — grab the `.dmg` from **Releases**, drag `SubBar.app` to `/Applications`,
-   then right-click → **Open** on first launch (macOS Gatekeeper, totally normal).
+1. **Install** — grab the `.dmg` from **Releases**, drag `SubBar.app` to `/Applications`.
+   First launch: if macOS says the developer can't be verified, right-click the app →
+   **Open**, or open **System Settings → Privacy & Security** and click **Open Anyway**.
+   (Expected for a build that isn't Apple-notarized.)
 2. **Run** — a `--` icon appears in the menu bar. Click it → gear ⚙️.
 3. **Pick a side** — **OpenCode Go** is the default; or switch to Minimax `.com` / `.io`.
 4. **Paste your secrets** — see the table below.
