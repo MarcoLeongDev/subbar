@@ -28,7 +28,7 @@ A tiny macOS menu-bar app that watches your subscription / quota usage for
 
 ## 🚀 Install
 
-**Homebrew** (macOS Intel & Apple Silicon):
+**Homebrew** (macOS Intel & Apple Silicon — one command, no prompts):
 
 ```bash
 brew tap MarcoLeongDev/tap
@@ -40,7 +40,7 @@ brew install --cask subbar
 <details>
 <summary>🇨🇳 中文安装说明（中国大陆用户）</summary>
 
-**方式一 · Homebrew**（国内网络通常可直接使用，二进制经由 jsDelivr 全球 CDN 分发）：
+**方式一 · Homebrew**（一条命令，全程无弹窗；二进制经由 jsDelivr 全球 CDN 分发，国内可直连）：
 
 ```bash
 brew tap MarcoLeongDev/tap
@@ -68,8 +68,12 @@ brew install --cask subbar
 3. **Paste your secrets** — see the table below.
 4. **Done.** Close settings and the tray starts doing its thing.
 
-> Not Apple-notarized yet: if macOS warns "can't be verified", right-click the app →
-> **Open**, or use **System Settings → Privacy & Security → Open Anyway**.
+> **Note on signing:** SubBar is signed but **not Apple-notarized yet** (Developer ID
+> account coming later). Homebrew 6 quarantines all cask downloads, so our tap
+> strips the quarantine flag in a `postflight` hook — `brew install` works with
+> zero prompts. A **manual** browser download of the `.dmg` still triggers
+> Gatekeeper: right-click the app → **Open**, or use
+> **System Settings → Privacy & Security → Open Anyway**.
 
 ---
 
