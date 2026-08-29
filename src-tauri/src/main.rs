@@ -729,8 +729,8 @@ fn format_ocg_title(u5: u32, uw: u32, um: u32) -> String {
 }
 
 // Dropdown placement math, shared by the tray-click handler and the launch
-// path so the window first appears exactly where it will live (right edge
-// aligned with the tray item, top just below it) instead of flashing at the
+// path so the window first appears exactly where it will live (horizontally
+// centered on the tray item, top just below it) instead of flashing at the
 // default centered position. Tray rect values are physical pixels; `win_w` is
 // the window width in physical pixels.
 fn compute_dropdown_xy(
@@ -740,7 +740,7 @@ fn compute_dropdown_xy(
     screen_w: f64,
     y_gap: f64,
 ) -> tauri::PhysicalPosition<f64> {
-    let mut x = tray_pos.x as f64 + tray_size.width as f64 - win_w;
+    let mut x = tray_pos.x as f64 + tray_size.width as f64 / 2.0 - win_w / 2.0;
     x = x.clamp(0.0, (screen_w - win_w).max(0.0));
     let y = tray_pos.y as f64 + tray_size.height as f64 + y_gap;
     tauri::PhysicalPosition::new(x, y)
@@ -1260,10 +1260,11 @@ mod tests {
     }
 
     #[test]
-    fn dropdown_xy_aligns_right_edge_with_tray_and_sits_below_it() {
+    fn dropdown_xy_centers_on_tray_and_sits_below_it() {
         // 2x Retina: tray at x=1800 (width 24, height 24, top y=30); window
-        // 212 logical px -> 424 physical px. Right edge should align with the
-        // tray's right edge and the top should sit just below the tray.
+        // 212 logical px -> 424 physical px. The window's horizontal center
+        // should align with the tray's center and the top should sit just
+        // below the tray.
         let pos = compute_dropdown_xy(
             tauri::PhysicalPosition::new(1800, 30),
             tauri::PhysicalSize::new(24, 24),
@@ -1271,14 +1272,18 @@ mod tests {
             3024.0,
             8.0,
         );
-        assert_eq!(pos.x, 1800.0 + 24.0 - 424.0);
+        assert_eq!(pos.x, 1800.0 + 24.0 / 2.0 - 424.0 / 2.0);
         assert_eq!(pos.y, 30.0 + 24.0 + 8.0);
+        // Window center == tray center on the same vertical line.
+        let win_center = pos.x + 424.0 / 2.0;
+        let tray_center = 1800.0 + 24.0 / 2.0;
+        assert!((win_center - tray_center).abs() < f64::EPSILON);
     }
 
     #[test]
     fn dropdown_xy_clamps_to_screen_edges() {
-        // Tray on the far left: the window right edge would overshoot the left
-        // screen edge, so x must clamp to 0.
+        // Tray near the left edge: the window centered on the tray would
+        // overshoot the left screen edge, so x must clamp to 0.
         let pos = compute_dropdown_xy(
             tauri::PhysicalPosition::new(0, 24),
             tauri::PhysicalSize::new(24, 24),
@@ -1287,7 +1292,7 @@ mod tests {
             8.0,
         );
         assert_eq!(pos.x, 0.0);
-        // Tray on the far right: the window must not extend past the screen.
+        // Tray near the right edge: the window must not extend past the screen.
         let pos = compute_dropdown_xy(
             tauri::PhysicalPosition::new(3024 - 24, 24),
             tauri::PhysicalSize::new(24, 24),
