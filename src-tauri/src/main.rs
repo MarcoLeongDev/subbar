@@ -771,7 +771,13 @@ fn compute_dropdown_position(
         }
     };
     let scale = window.scale_factor().unwrap_or(1.0);
-    let win_w = WIDGET_OUTER_WIDTH * scale;
+    // Use the window's real on-screen width (physical px) so the panel is
+    // truly centered on the tray item regardless of the configured inner
+    // size; the constant is only a fallback if the size cannot be read.
+    let win_w = window
+        .outer_size()
+        .map(|s| s.width as f64)
+        .unwrap_or(WIDGET_OUTER_WIDTH * scale);
     let screen_w = window
         .primary_monitor()
         .ok()
