@@ -380,6 +380,54 @@ fn render_title(app: &tauri::AppHandle, title: &str) {
     if let Some(tray) = app.tray_by_id("main-tray") {
         let _ = tray.set_title(Some(title.to_string()));
     }
+    // The title text changes the status item's width, which moves its center.
+    // Re-center the panel on the (new) item center so it never drifts out of
+    // alignment as usage percentages update.
+    reposition_dropdown(app);
+}
+
+// Re-center the panel under the current tray item. Used on launch, on tray
+// click, and after every title change. No-op if the tray has no usable rect
+// yet or the window is missing.
+fn reposition_dropdown(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Some(tray) = app.tray_by_id("main-tray") else {
+        return;
+    };
+    match tray.rect() {
+        Ok(Some(rect)) => {
+            let has_size = match rect.size {
+                tauri::Size::Physical(s) => s.width > 0 && s.height > 0,
+                _ => false,
+            };
+            if has_size {
+                let pos = compute_dropdown_position(&rect, &window);
+                let tp = match rect.position {
+                    tauri::Position::Physical(p) => p,
+                    _ => tauri::PhysicalPosition::new(0, 0),
+                };
+                let ts = match rect.size {
+                    tauri::Size::Physical(s) => s,
+                    _ => tauri::PhysicalSize::new(0, 0),
+                };
+                let scale = window.scale_factor().unwrap_or(1.0);
+                let win_w = window.outer_size().map(|s| s.width as f64).unwrap_or(0.0);
+                let tray_cx = tp.x as f64 + ts.width as f64 / 2.0;
+                let win_cx = pos.x + win_w / 2.0;
+                log::info!(
+                    "panel recentered: trayCenterX={:.1} winCenterX={:.1} offset={:.1} (scale={:.2})",
+                    tray_cx,
+                    win_cx,
+                    tray_cx - win_cx,
+                    scale
+                );
+                let _ = window.set_position(pos);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn is_ocg_endpoint(endpoint: &str) -> bool {
