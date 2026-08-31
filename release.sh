@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Release SubBar: build, create GitHub release with DMG, and update homebrew tap.
+# Release SubBar: build universal DMG, create GitHub release, update homebrew tap.
 # Usage: ./release.sh [patch|minor|major]
 set -euo pipefail
 
@@ -25,26 +25,29 @@ echo "==> Bumping $CURRENT -> $NEW_VERSION ($BUMP)"
 # --- Update versions ---
 sed -i '' "s/^version = \".*\"/version = \"$NEW_VERSION\"/" "$CARGO_TOML"
 sed -i '' "s/<string>$CURRENT<\/string>/<string>$NEW_VERSION<\/string>/" "$INFO_PLIST"
-# Increment CFBundleVersion (build number)
 OLD_BUILD=$(sed -n '/CFBundleVersion/{n;s/.*<string>//;s/<\/string>.*//p}' "$INFO_PLIST")
 NEW_BUILD=$((OLD_BUILD + 1))
 sed -i '' "/CFBundleVersion/{n;s/<string>$OLD_BUILD</<string>$NEW_BUILD</}" "$INFO_PLIST"
-# tauri.conf.json
 sed -i '' "s/\"version\": \".*\"/\"version\": \"$NEW_VERSION\"/" "$SRC_DIR/tauri.conf.json"
-
 echo "==> Version bumped to $NEW_VERSION (build $NEW_BUILD)"
 
-# --- Build ---
+# --- Build universal binary ---
 cd "$SRC_DIR"
-echo "==> Building..."
-cargo tauri build
+echo "==> Building universal binary..."
+cargo tauri build --target universal-apple-darwin
 
-DMG=$(ls target/release/bundle/dmg/SubBar_${NEW_VERSION}_*.dmg 2>/dev/null | head -1)
+DMG=$(ls target/universal-apple-darwin/release/bundle/dmg/SubBar_${NEW_VERSION}_universal.dmg 2>/dev/null | head -1)
+if [ -z "$DMG" ]; then
+  # Fallback: check arch-specific DMG and rename
+  DMG=$(ls target/universal-apple-darwin/release/bundle/dmg/SubBar_${NEW_VERSION}_*.dmg 2>/dev/null | head -1)
+fi
 if [ -z "$DMG" ]; then
   echo "ERROR: DMG not found" >&2
   exit 1
 fi
-DMG_NAME=$(basename "$DMG")
+DMG_NAME="SubBar_${NEW_VERSION}_universal.dmg"
+cp "$DMG" "$(dirname "$DMG")/$DMG_NAME"
+DMG="$(dirname "$DMG")/$DMG_NAME"
 echo "==> Built $DMG_NAME"
 
 # --- Git commit & tag ---
@@ -58,55 +61,49 @@ echo "==> Creating GitHub release v$NEW_VERSION..."
 gh release create "v$NEW_VERSION" \
   --title "SubBar v$NEW_VERSION" \
   --generate-notes \
-  "$DMG#SubBar_${NEW_VERSION}_aarch64.dmg"
+  "$DMG#$DMG_NAME"
 
 # --- Update homebrew tap ---
 TAP_DIR=$(mktemp -d)
 echo "==> Cloning homebrew tap..."
-git clone https://github.com/MarcoLeongDev/homebrew-tap.git "$TAP_DIR" 2>/dev/null || true
+git clone https://github.com/MarcoLeongDev/homebrew-tap.git "$TAP_DIR"
 
-if [ -d "$TAP_DIR" ]; then
-  # Get the SHA256 of the DMG
-  DMG_SHA=$(shasum -a 256 "$DMG" | awk '{print $1}')
-  # Get the download URL from the GitHub release
-  DOWNLOAD_URL="https://github.com/MarcoLeongDev/subbar/releases/download/v$NEW_VERSION/$DMG_NAME"
+DMG_SHA=$(shasum -a 256 "$DMG" | awk '{print $1}')
 
-  FORMULA="$TAP_DIR/Formula/s.rb"
-  cat > "$FORMULA" <<FORMULA_EOF
-class S < Formula
-  desc "API quota in your menu bar — Minimax and OpenCode Go"
-  homepage "https://github.com/MarcoLeongDev/subbar"
+# Copy DMG to tap dist/
+cp "$DMG" "$TAP_DIR/dist/$DMG_NAME"
+
+# Update cask formula
+cat > "$TAP_DIR/Casks/subbar.rb" <<FORMULA_EOF
+cask "subbar" do
   version "$NEW_VERSION"
   sha256 "$DMG_SHA"
 
-  url "$DOWNLOAD_URL"
-
+  url "https://cdn.jsdelivr.net/gh/MarcoLeongDev/homebrew-tap@v#{version}/dist/SubBar_#{version}_universal.dmg"
+  name "SubBar"
+  desc "Universal macOS menu-bar app to track Opencode Go and Minimax usage"
+  homepage "https://github.com/MarcoLeongDev/subbar"
   app "SubBar.app"
 
   postflight do
-    system "xattr", "-dr", "com.apple.quarantine", "#{staged_path}/SubBar.app"
+    system_command "/usr/bin/xattr",
+                   args: ["-dr", "com.apple.quarantine", "#{appdir}/SubBar.app"]
   end
-
-  uninstall quit: "com.subbar.app"
 end
 FORMULA_EOF
 
-  cd "$TAP_DIR"
-  git add -A
-  git commit -m "SubBar v$NEW_VERSION" || true
-  git push origin main || echo "WARN: Could not push to homebrew-tap"
-  cd "$ROOT"
-  rm -rf "$TAP_DIR"
-  echo "==> Homebrew tap updated"
-else
-  echo "WARN: Could not clone homebrew-tap, please update manually"
-fi
+cd "$TAP_DIR"
+git add -A
+git commit -m "SubBar v$NEW_VERSION"
+git push origin main
+cd "$ROOT"
+rm -rf "$TAP_DIR"
+echo "==> Homebrew tap updated"
 
 # --- Push to remotes ---
 echo "==> Pushing to origin (GitHub)..."
 git push origin main --tags
 
-# Push to Gitee if configured
 if git remote get-url gitee &>/dev/null; then
   echo "==> Pushing to Gitee..."
   git push gitee main --tags || echo "WARN: Could not push to Gitee"
@@ -118,6 +115,6 @@ fi
 
 echo ""
 echo "==> Release v$NEW_VERSION complete!"
-echo "    GitHub: https://github.com/MarcoLeongDev/subbar/releases/tag/v$NEW_VERSION"
-echo "    DMG:    $DMG_NAME"
+echo "    GitHub:  https://github.com/MarcoLeongDev/subbar/releases/tag/v$NEW_VERSION"
+echo "    DMG:     $DMG_NAME"
 echo "    Install: brew tap MarcoLeongDev/tap && brew install --cask subbar"
