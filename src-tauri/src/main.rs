@@ -194,11 +194,10 @@ fn set_api_key(key: String, endpoint: String, state: tauri::State<AppState>) {
         let prefix_ok = key.starts_with("sk-");
         let len_ok = (4..=256).contains(&key.len());
         log::warn!(
-            "set_api_key: rejected (endpoint={} prefix_ok={} len_ok={} len={})",
+            "set_api_key: rejected (endpoint={} prefix_ok={} len_ok={})",
             endpoint,
             prefix_ok,
             len_ok,
-            key.len()
         );
         return;
     }
@@ -342,7 +341,7 @@ fn set_endpoint(ep: String, app: tauri::AppHandle, state: tauri::State<AppState>
 }
 
 fn redact_api_key(key: &str) -> String {
-    if key.len() <= 8 {
+    if key.len() <= 12 {
         "[REDACTED]".to_string()
     } else {
         format!("{}...{}", &key[..4], &key[key.len() - 4..])
@@ -707,10 +706,14 @@ async fn fetch_ocg_quota(app: tauri::AppHandle) -> Result<serde_json::Value, Str
     fetch_ocg_and_update(&app).await
 }
 
-// Open an external URL in the user's default browser. Tauri's webview does not
-// navigate to foreign links on its own, so the ocg help link calls this.
+// Open an external URL in the user's default browser. Only HTTPS URLs are
+// allowed to prevent abuse via file://, ssh://, or other custom protocol handlers.
 #[tauri::command]
 fn open_external(url: String) {
+    if !url.starts_with("https://") {
+        warn!("open_external: rejected non-https URL");
+        return;
+    }
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(&url).spawn();
     #[cfg(target_os = "windows")]
