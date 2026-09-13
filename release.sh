@@ -61,9 +61,11 @@ if [ -z "$DMG" ]; then
   exit 1
 fi
 DMG_NAME="SubBar_${NEW_VERSION}_universal.dmg"
-cp "$DMG" "$(dirname "$DMG")/$DMG_NAME"
-DMG="$(dirname "$DMG")/$DMG_NAME"
-echo "==> Built $DMG_NAME"
+if [ "$DMG" != "$(dirname "$DMG")/$DMG_NAME" ]; then
+  cp "$DMG" "$(dirname "$DMG")/$DMG_NAME"
+  DMG="$(dirname "$DMG")/$DMG_NAME"
+fi
+echo "==> Built $DMG_NAME ($DMG)"
 
 # --- Git commit & tag ---
 cd "$ROOT"
