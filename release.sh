@@ -102,9 +102,12 @@ cask "subbar" do
   homepage "https://github.com/MarcoLeongDev/subbar"
   app "SubBar.app"
 
-  postflight do
-    system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "#{appdir}/SubBar.app"]
+  # SubBar is not Apple-notarized yet, and Homebrew 6 quarantines all cask
+  # downloads unconditionally. Strip the quarantine post-install so the app
+  # launches without a Gatekeeper prompt. (Personal tap only — the official
+  # homebrew/cask tap forbids this stanza pattern.)
+  postflight_steps do
+    run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{appdir}}/SubBar.app"]
   end
 end
 FORMULA_EOF
