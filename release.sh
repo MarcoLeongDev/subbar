@@ -34,7 +34,22 @@ echo "==> Version bumped to $NEW_VERSION (build $NEW_BUILD)"
 # --- Build universal binary ---
 cd "$SRC_DIR"
 echo "==> Building universal binary..."
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
 cargo tauri build --target universal-apple-darwin
+
+# --- Verify the bundle is genuinely fat ---
+# v1.0.35 shipped an arm64-only binary under a `_universal` name (plain
+# `cargo tauri build` on Apple Silicon), which shows a stop-sign badge and
+# refuses to launch on Intel Macs. Refuse to publish unless both slices exist.
+APP="target/universal-apple-darwin/release/bundle/macos/SubBar.app"
+[ -d "$APP" ] || { echo "ERROR: .app not found after build" >&2; exit 1; }
+BIN="$APP/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$APP/Contents/Info.plist")"
+ARCHS=$(lipo -archs "$BIN")
+echo "==> Binary archs: $ARCHS"
+if [[ "$ARCHS" != *"x86_64"* ]] || [[ "$ARCHS" != *"arm64"* ]]; then
+  echo "ERROR: expected universal binary (x86_64 arm64), got: $ARCHS — refusing to publish" >&2
+  exit 1
+fi
 
 DMG=$(ls target/universal-apple-darwin/release/bundle/dmg/SubBar_${NEW_VERSION}_universal.dmg 2>/dev/null | head -1)
 if [ -z "$DMG" ]; then
