@@ -24,10 +24,10 @@ echo "==> Bumping $CURRENT -> $NEW_VERSION ($BUMP)"
 
 # --- Update versions ---
 sed -i '' "s/^version = \".*\"/version = \"$NEW_VERSION\"/" "$CARGO_TOML"
-sed -i '' "s/<string>$CURRENT<\/string>/<string>$NEW_VERSION<\/string>/" "$INFO_PLIST"
-OLD_BUILD=$(sed -n '/CFBundleVersion/{n;s/.*<string>//;s/<\/string>.*//p}' "$INFO_PLIST")
+plutil -replace CFBundleShortVersionString -string "$NEW_VERSION" "$INFO_PLIST"
+OLD_BUILD=$(plutil -extract CFBundleVersion raw "$INFO_PLIST")
 NEW_BUILD=$((OLD_BUILD + 1))
-sed -i '' "/CFBundleVersion/{n;s/<string>$OLD_BUILD</<string>$NEW_BUILD</}" "$INFO_PLIST"
+plutil -replace CFBundleVersion -string "$NEW_BUILD" "$INFO_PLIST"
 sed -i '' "s/\"version\": \".*\"/\"version\": \"$NEW_VERSION\"/" "$SRC_DIR/tauri.conf.json"
 echo "==> Version bumped to $NEW_VERSION (build $NEW_BUILD)"
 
