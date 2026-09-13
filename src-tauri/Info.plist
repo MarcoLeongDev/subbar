@@ -2,18 +2,18 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0.36</string>
-    <key>CFBundleVersion</key>
-    <string>14</string>
-    <key>LSUIElement</key>
-    <true/>
-    <key>NSGlassUsageDescription</key>
-    <string>SubBar uses the liquid glass effect for its user interface.</string>
-    <key>NSAppTransportSecurity</key>
-    <dict>
-        <key>NSAllowsArbitraryLoads</key>
-        <false/>
-    </dict>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.37</string>
+	<key>CFBundleVersion</key>
+	<string>15</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<false/>
+	</dict>
+	<key>NSGlassUsageDescription</key>
+	<string>SubBar uses the liquid glass effect for its user interface.</string>
 </dict>
 </plist>
