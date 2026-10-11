@@ -4,7 +4,7 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
-![Version](https://img.shields.io/badge/version-v1.0.38-blue)
+![Version](https://img.shields.io/badge/version-v1.0.40-blue)
 
 A tiny macOS menu-bar app that watches your subscription / quota usage for
 **Minimax** (`.com` / `.io`) and **OpenCode Go**. One click. One glance. Done.
@@ -81,8 +81,8 @@ brew install --cask subbar
 
 | Endpoint | You need | Where to get it |
 |---------|---------|-----------------|
-| **OpenCode Go**<br>(default) | **Workspace ID** | Your console URL: `opencode.ai/console/<workspace-id>/go` — the `<workspace-id>` bit. Leave it empty and SubBar picks your first workspace automatically. |
-| | **Session cookie** | Sign in at [opencode.ai/console](https://opencode.ai/console), then DevTools → Application → Cookies → `opencode.ai` → copy the value of `__Host-console_session` (or `auth` if that is what your session uses). |
+| **OpenCode Go**<br>(default) | **Go API key** (`sk-…`, recommended) | Console → API Keys — or the `opencode-go` entry in `~/.local/share/opencode/auth.json` after `opencode auth login`. Paste it into the token field; no workspace ID needed. |
+| | **Workspace ID + session cookie** (alternative) | Your console URL: `opencode.ai/console/<workspace-id>/go` — the `<workspace-id>` bit (or leave it empty to auto-pick your first workspace); plus the `__Host-console_session` cookie (DevTools → Application → Cookies → `opencode.ai`). |
 | **Minimax** | **API key** (`sk-…`) | [platform.minimaxi.com](https://platform.minimaxi.com) (or `platform.minimax.io` for international). |
 
 All credentials live in the OS keychain and travel only over HTTPS.

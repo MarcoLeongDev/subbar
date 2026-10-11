@@ -14,25 +14,28 @@ migration the fetch fails (HTTP 404 from the dead route, or a payload-less
 shell) and the tray falls back to `unauth`.
 
 ## What
-Replace the legacy HTML scraping with the console JSON API. No legacy
-fallback is kept (per requirements):
+Read Go usage from the OpenCode console surface. No legacy fallback is kept
+(per requirements):
 
-1. Discover the workspace id via `GET /console/api/orgs` when the user
-   has not entered one; accept a bare id (`wrk_…`/`org_…`) or a pasted
-   console/legacy dashboard URL in the workspace field.
-2. Read Go usage via `GET /console/api/go/status` with the
-   `x-org-id: <workspace-id>` header and the console session cookie.
-   Parse `access.meters.fiveHour|week|month` (`usedMicroCents`,
-   `limitMicroCents`, `resetsAt`); the month meter falls back to
-   `access.endsAt` for its reset time.
-3. Send the pasted credential under every session cookie name the console
-   accepts (`auth`, `__Host-auth`, `__Host-console_session`) so a value
-   copied from the browser works regardless of which cookie the user
-   picked.
-4. Map failures to clear, actionable errors (401/403 → re-copy the
-   cookie; 404 → workspace not found; missing `access`/meters → no Go
-   subscription).
-5. Drop the now-dead regex scrapers and the legacy URL template; keep
-   keychain storage and the settings UI shape unchanged.
-6. Update the README credential guide (console URL, cookie name).
+1. Prefer the Zen usage API when the stored token is a Go API key
+   (`sk-…`): `GET https://opencode.ai/zen/go/v1/usage` with
+   `Authorization: Bearer <key>` returns
+   `{usage:{rolling|weekly|monthly:{status,percent,resetsAt}}}` — verified
+   live 2026-10-11. No workspace id or session cookie needed; the key is
+   workspace-bound. The key comes from the console API Keys page (or the
+   `opencode-go` entry in `~/.local/share/opencode/auth.json`).
+2. Otherwise treat the stored token as a console session cookie and read
+   usage via `GET /console/api/go/status` with the `x-org-id` header,
+   discovering the workspace via `GET /console/api/orgs` when the field is
+   empty (the console session cookie is `__Host-console_session`; the
+   legacy `auth` cookie is rejected by the console API with 401).
+3. Accept a bare workspace id or a pasted console/legacy dashboard URL in
+   the workspace field; send a pasted session cookie under every accepted
+   session name (`auth`, `__Host-auth`, `__Host-console_session`).
+4. Map failures to clear, actionable errors (401/403 naming the expected
+   credential, 404 workspace not found, missing windows/subscription).
+5. Drop the dead regex scrapers and the legacy URL template; keep
+   keychain storage and the settings UI shape unchanged (the existing
+   token field now also accepts the Go API key).
+6. Update the README credential guide + in-app hints.
 7. Bump patch version, build, deploy to /Applications, verify.

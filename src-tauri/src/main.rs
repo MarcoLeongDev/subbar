@@ -565,8 +565,45 @@ async fn run_agent_limits(app: &tauri::AppHandle) -> Result<serde_json::Value, S
 
 const OCG_CONSOLE_ORGS_URL: &str = "https://opencode.ai/console/api/orgs";
 const OCG_CONSOLE_GO_STATUS_URL: &str = "https://opencode.ai/console/api/go/status";
+// The Zen usage API is the preferred Go data source: one Bearer call, no
+// workspace id, no browser session. Verified live 2026-10-11.
+const OCG_ZEN_GO_USAGE_URL: &str = "https://opencode.ai/zen/go/v1/usage";
 const OCG_USER_AGENT: &str = "SubBar (https://github.com/MarcoLeongDev/subbar)";
 const OCG_FETCH_TIMEOUT_SECS: u64 = 10;
+
+// The stored OCG credential is either a Go API key (`sk-…`, from the console
+// API Keys page or the `opencode-go` entry in
+// `~/.local/share/opencode/auth.json`) or a browser session cookie. The key
+// is detected by prefix so a pasted `Bearer sk-…` header works too.
+#[derive(PartialEq, Eq, Debug)]
+enum OcgTokenKind {
+    ApiKey,
+    SessionCookie,
+}
+
+fn ocg_token_kind(raw: &str) -> OcgTokenKind {
+    let token = raw.trim();
+    let bare = token
+        .strip_prefix("Bearer ")
+        .or_else(|| token.strip_prefix("bearer "))
+        .unwrap_or(token)
+        .trim_start();
+    if bare.starts_with("sk-") {
+        OcgTokenKind::ApiKey
+    } else {
+        OcgTokenKind::SessionCookie
+    }
+}
+
+// Strips an optional `Bearer ` scheme from the stored credential.
+fn ocg_bearer_token(raw: &str) -> &str {
+    let token = raw.trim();
+    token
+        .strip_prefix("Bearer ")
+        .or_else(|| token.strip_prefix("bearer "))
+        .map(|t| t.trim_start())
+        .unwrap_or(token)
+}
 
 // Session cookie names the console accepts. Which one a browser holds depends
 // on how the user signed in: `auth` / `__Host-auth` for the legacy app,
@@ -616,22 +653,36 @@ fn ocg_workspace_id(raw: &str) -> String {
     trimmed.to_string()
 }
 
-// Fetches OpenCode Go usage for the given workspace from the console API,
-// replicating the browser's console calls (verified against the live console).
-// Returns JSON shaped like `{ providers: { opencodego: { limits: {...} } } }`
-// so `parse_ocg_bars` can consume it unchanged.
+// Fetches OpenCode Go usage. A Go API key (`sk-…`) goes to the Zen usage API
+// (no workspace id or browser session needed); anything else is treated as a
+// browser session cookie for the console API. Returns JSON shaped like
+// `{ providers: { opencodego: { limits: {...} } } }` so `parse_ocg_bars` can
+// consume it unchanged.
 async fn fetch_ocg_usage(
     workspace_id: &str,
     auth_cookie: &str,
 ) -> Result<serde_json::Value, String> {
-    let cookie = auth_cookie.trim();
-    if cookie.is_empty() {
+    let credential = auth_cookie.trim();
+    if credential.is_empty() {
         return Err(
-            "OpenCode Go session cookie missing — copy it from DevTools → Cookies → opencode.ai"
+            "OpenCode Go credential missing — paste your Go API key (console → API Keys, or the opencode-go entry in ~/.local/share/opencode/auth.json)"
                 .into(),
         );
     }
+    if ocg_token_kind(credential) == OcgTokenKind::ApiKey {
+        return fetch_ocg_zen_usage(ocg_bearer_token(credential)).await;
+    }
+    fetch_ocg_console_usage(workspace_id, credential).await
+}
 
+// Fetches OpenCode Go usage for the given workspace from the console API,
+// replicating the browser's console calls (verified against the live console).
+// Used when the stored credential is a browser session cookie rather than a
+// Go API key.
+async fn fetch_ocg_console_usage(
+    workspace_id: &str,
+    cookie: &str,
+) -> Result<serde_json::Value, String> {
     // The workspace id may be empty (auto-discovered from the account), a bare
     // id, or a pasted dashboard URL.
     let workspace = match ocg_workspace_id(workspace_id) {
@@ -656,7 +707,7 @@ async fn fetch_ocg_usage(
         // it in every error message so it never leaks in logs or the UI.
         return match status.as_u16() {
             401 | 403 => Err(format!(
-                "HTTP {status} — OpenCode Go session cookie rejected; copy a fresh one from DevTools → Cookies → opencode.ai"
+                "HTTP {status} — OpenCode Go session cookie rejected; copy the __Host-console_session cookie (DevTools → Application → Cookies → opencode.ai)"
             )),
             404 => Err(format!(
                 "HTTP 404 — workspace {} not found in the OpenCode console; check the workspace id",
@@ -676,13 +727,99 @@ async fn fetch_ocg_usage(
         .map_err(|e| format!("OpenCode Go: invalid API response: {e}"))?;
 
     let limits = ocg_limits_from_console(&data)?;
-    Ok(serde_json::json!({
+    Ok(ocg_limits_response(limits))
+}
+
+// Wraps parsed usage windows in the provider shape `parse_ocg_bars` consumes.
+fn ocg_limits_response(
+    limits: serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Value {
+    serde_json::json!({
         "providers": {
             "opencodego": {
                 "limits": serde_json::Value::Object(limits)
             }
         }
-    }))
+    })
+}
+
+// Fetches OpenCode Go usage from the Zen usage API with a Go API key. The key
+// is workspace-bound, so no workspace id, session cookie, or org scoping is
+// needed. Verified live 2026-10-11.
+async fn fetch_ocg_zen_usage(api_key: &str) -> Result<serde_json::Value, String> {
+    let resp = http_client()
+        .get(OCG_ZEN_GO_USAGE_URL)
+        .header("User-Agent", OCG_USER_AGENT)
+        .header("Authorization", format!("Bearer {}", api_key.trim()))
+        .header("Accept", "application/json")
+        .timeout(Duration::from_secs(OCG_FETCH_TIMEOUT_SECS))
+        .send()
+        .await
+        .map_err(|e| format!("OpenCode Go request failed: {e}"))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        return match status.as_u16() {
+            401 | 403 => Err(format!(
+                "HTTP {status} — OpenCode Go API key rejected; copy it from the console API Keys page or your ~/.local/share/opencode/auth.json (opencode-go entry)"
+            )),
+            429 | 500..=599 => Err(format!("HTTP {status} (transient)")),
+            _ => Err(format!("HTTP {status} from the OpenCode Go API")),
+        };
+    }
+
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("OpenCode Go: reading response: {e}"))?;
+    let data: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("OpenCode Go: invalid API response: {e}"))?;
+
+    let limits = ocg_limits_from_zen_usage(&data)?;
+    Ok(ocg_limits_response(limits))
+}
+
+// Maps the Zen `go/v1/usage` payload onto SubBar's internal limit shape.
+// Each window is `{ status, percent, resetsAt }` where `percent` is the used
+// percentage (0–100). All three windows are required: the UI renders three
+// pills and missing data must surface as an error, never as fake zeros.
+fn ocg_limits_from_zen_usage(
+    v: &serde_json::Value,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let usage = v
+        .get("usage")
+        .and_then(|u| u.as_object())
+        .ok_or_else(|| "OpenCode Go: no usage windows in the API response".to_string())?;
+    let now = Utc::now();
+
+    let mut limits = serde_json::Map::new();
+    for (window_name, key) in [
+        ("rolling", "five_hour"),
+        ("weekly", "seven_day"),
+        ("monthly", "monthly"),
+    ] {
+        let window = usage
+            .get(window_name)
+            .and_then(|w| w.as_object())
+            .ok_or_else(|| format!("OpenCode Go: missing {window_name} window"))?;
+        // SEC: only numbers flow into the UI; missing/invalid fields error out
+        // instead of silently becoming 0.
+        let used_pct = window
+            .get("percent")
+            .and_then(|p| p.as_f64())
+            .ok_or_else(|| format!("OpenCode Go: missing {window_name}.percent"))?;
+        let resets_at = window
+            .get("resetsAt")
+            .and_then(|r| r.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| now.to_rfc3339());
+        limits.insert(
+            key.to_string(),
+            serde_json::json!({ "used_percent": used_pct, "resets_at": resets_at }),
+        );
+    }
+    Ok(limits)
 }
 
 // Resolves the workspace id from the console account when the user has not
@@ -701,7 +838,7 @@ async fn ocg_discover_workspace_id(cookie: &str) -> Result<String, String> {
     match resp.status().as_u16() {
         401 | 403 => {
             return Err(
-                "HTTP 401 — OpenCode Go session cookie rejected; copy a fresh one from DevTools → Cookies → opencode.ai"
+                "HTTP 401 — OpenCode Go session cookie rejected; copy the __Host-console_session cookie (DevTools → Application → Cookies → opencode.ai)"
                     .into(),
             );
         }
@@ -1256,21 +1393,21 @@ mod tests {
     #[tokio::test]
     async fn fetch_ocg_usage_no_cookie_is_clear_error() {
         let res = fetch_ocg_usage("wrk_TEST0000000000000000000000", "").await;
-        let err = res.expect_err("empty cookie must error, never fetch");
+        let err = res.expect_err("empty credential must error, never fetch");
         assert!(
-            err.contains("session cookie missing"),
+            err.contains("credential missing"),
             "unexpected error: {err}"
         );
     }
 
     #[tokio::test]
     async fn fetch_ocg_usage_blank_space_cookie_is_clear_error() {
-        // A whitespace-only cookie must error before any network call, even
-        // though an empty workspace id would otherwise trigger discovery.
+        // A whitespace-only credential must error before any network call,
+        // even though an empty workspace id would otherwise trigger discovery.
         let res = fetch_ocg_usage("   ", "  ").await;
-        let err = res.expect_err("whitespace cookie must error");
+        let err = res.expect_err("whitespace credential must error");
         assert!(
-            err.contains("session cookie missing"),
+            err.contains("credential missing"),
             "unexpected error: {err}"
         );
     }
@@ -1351,6 +1488,110 @@ mod tests {
         assert_eq!(ocg_workspace_id(&format!("  {id}  ")), id);
         // A typo is passed through untouched so the API can reject it clearly.
         assert_eq!(ocg_workspace_id("not-a-workspace"), "not-a-workspace");
+    }
+
+    #[test]
+    fn ocg_token_kind_routes_api_key_to_zen_and_rest_to_console() {
+        assert_eq!(ocg_token_kind("sk-abc123"), OcgTokenKind::ApiKey);
+        assert_eq!(ocg_token_kind("  sk-abc123  "), OcgTokenKind::ApiKey);
+        assert_eq!(ocg_token_kind("Bearer sk-abc123"), OcgTokenKind::ApiKey);
+        assert_eq!(
+            ocg_token_kind("Fe26.2**definitely-a-session-cookie"),
+            OcgTokenKind::SessionCookie
+        );
+        assert_eq!(
+            ocg_token_kind("auth=abc; other=xyz"),
+            OcgTokenKind::SessionCookie
+        );
+        assert_eq!(ocg_bearer_token("Bearer sk-abc123"), "sk-abc123");
+        assert_eq!(ocg_bearer_token("sk-abc123"), "sk-abc123");
+    }
+
+    #[test]
+    fn ocg_limits_from_zen_usage_maps_windows_to_pills() {
+        // Mirrors the live `zen/go/v1/usage` payload (verified 2026-10-11).
+        let v = serde_json::json!({
+            "usage": {
+                "rolling": { "status": "ok", "percent": 4, "resetsAt": "2026-10-11T17:08:01.000Z" },
+                "weekly": { "status": "ok", "percent": 48, "resetsAt": "2026-10-12T00:00:00.000Z" },
+                "monthly": { "status": "ok", "percent": 24, "resetsAt": "2026-11-05T00:55:32.000Z" }
+            }
+        });
+        let limits = ocg_limits_from_zen_usage(&v).expect("limits");
+        let pct = |k: &str| limits[k].get("used_percent").and_then(|x| x.as_f64()).unwrap();
+        assert_eq!(pct("five_hour"), 4.0);
+        assert_eq!(pct("seven_day"), 48.0);
+        assert_eq!(pct("monthly"), 24.0);
+        assert_eq!(
+            limits["monthly"].get("resets_at").and_then(|x| x.as_str()),
+            Some("2026-11-05T00:55:32.000Z")
+        );
+        // The mapped shape must feed `parse_ocg_bars` unchanged.
+        let wrapped = serde_json::json!({ "providers": { "opencodego": { "limits": limits } } });
+        let bars = parse_ocg_bars(&wrapped).expect("bars");
+        assert_eq!(bars.len(), 3);
+        let pcts: Vec<f64> = bars
+            .iter()
+            .filter_map(|b| b.get("used_percent").and_then(|x| x.as_f64()))
+            .collect();
+        assert_eq!(pcts, vec![4.0, 48.0, 24.0]);
+    }
+
+    #[test]
+    fn ocg_limits_from_zen_usage_rejects_incomplete_payloads() {
+        let no_usage = serde_json::json!({});
+        let err = ocg_limits_from_zen_usage(&no_usage).expect_err("must error");
+        assert!(err.contains("no usage windows"), "unexpected error: {err}");
+
+        let missing_month = serde_json::json!({
+            "usage": {
+                "rolling": { "status": "ok", "percent": 4, "resetsAt": "x" },
+                "weekly": { "status": "ok", "percent": 48, "resetsAt": "x" }
+            }
+        });
+        let err = ocg_limits_from_zen_usage(&missing_month).expect_err("must error");
+        assert!(err.contains("missing monthly window"), "unexpected error: {err}");
+
+        let missing_percent = serde_json::json!({
+            "usage": {
+                "rolling": { "status": "ok" },
+                "weekly": { "status": "ok", "percent": 48, "resetsAt": "x" },
+                "monthly": { "status": "ok", "percent": 24, "resetsAt": "x" }
+            }
+        });
+        let err = ocg_limits_from_zen_usage(&missing_percent).expect_err("must error");
+        assert!(err.contains("missing rolling.percent"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn fetch_ocg_zen_usage_bogus_key_errors() {
+        // A syntactically valid but unknown Go API key must surface an Err
+        // (401), never fake usage data.
+        let res = fetch_ocg_usage("", "sk-bogus-test-key-0000000000000").await;
+        assert!(res.is_err(), "bogus API key must not return usage");
+    }
+
+    #[tokio::test]
+    async fn fetch_ocg_zen_usage_valid_key_returns_three_windows() {
+        // Requires OCG_TEST_APIKEY env var (real Go API key, not committed).
+        let Ok(key) = std::env::var("OCG_TEST_APIKEY") else {
+            eprintln!("skipping: OCG_TEST_APIKEY not set");
+            return;
+        };
+        let v = fetch_ocg_usage("", &key).await.expect("valid key fetch");
+        let limits = v
+            .get("providers")
+            .and_then(|p| p.get("opencodego"))
+            .and_then(|o| o.get("limits"))
+            .and_then(|l| l.as_object())
+            .expect("limits object");
+        for k in ["five_hour", "seven_day", "monthly"] {
+            assert!(limits.contains_key(k), "missing window {k}");
+            let used = limits[k].get("used_percent").and_then(|x| x.as_f64());
+            assert!(used.is_some(), "{k} used_percent");
+            let reset = limits[k].get("resets_at").and_then(|x| x.as_str());
+            assert!(reset.is_some() && !reset.unwrap().is_empty(), "{k} resets_at");
+        }
     }
 
     #[test]
