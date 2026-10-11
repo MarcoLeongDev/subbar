@@ -67,6 +67,12 @@ if [ "$DMG" != "$(dirname "$DMG")/$DMG_NAME" ]; then
 fi
 echo "==> Built $DMG_NAME ($DMG)"
 
+# Make DMG absolute: the steps below (GitHub release, tap update) run from
+# $ROOT, where the src-tauri-relative path above no longer resolves. Without
+# this, `gh release create` fails with "no such file or directory" and the
+# release aborts after the tag is already created.
+case "$DMG" in /*) ;; *) DMG="$SRC_DIR/$DMG" ;; esac
+
 # --- Git commit & tag ---
 cd "$ROOT"
 git add -A
