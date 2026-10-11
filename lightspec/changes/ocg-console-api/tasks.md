@@ -17,3 +17,5 @@
 - [x] 15. cargo test green, bump 1.0.40 -> 1.0.41, commit 4942134, rebuild, redeploy /Applications, v1.0.41 running
 - [x] 16. Screenshots to /tmp (menubar + settings + error view)
 - [x] 17. Clean-subagent regression review: PASS, no regressions; 1 UX wart fixed in v1.0.41
+- [ ] 18. Release: merge fix/ocg-console-api -> main (fast-forward)
+- [ ] 19. Release: run ./release.sh (universal build + verify + tag + GH release + tap + push origin/gitee)
