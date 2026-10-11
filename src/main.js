@@ -275,7 +275,9 @@ async function saveOcgCreds() {
   ocgCookie = cookie;
   ocgDirty = false;
   ocgRevealed = false;
-  ocgHasCredentials = !!(ws && cookie);
+  // The workspace id is optional (API-key flow and console auto-discovery
+  // both work without one); the credential alone decides "has credentials".
+  ocgHasCredentials = !!cookie;
   // Keep the typed values visible — do NOT re-fetch and wipe the inputs.
   updateOcgCredsState();
 }

@@ -251,7 +251,10 @@ fn get_ocg_credentials(reveal: Option<bool>, state: tauri::State<AppState>) -> s
     } else {
         redact_api_key(&ws)
     };
-    let has_credentials = !ws.is_empty() && !cookie.is_empty();
+    // The workspace id is optional: the Go API key flow and the console
+    // auto-discovery flow both work without one. The credential alone
+    // decides whether the endpoint can fetch.
+    let has_credentials = !cookie.is_empty();
     serde_json::json!({
         "workspace_id": ws_out,
         "auth_cookie": cookie_out,
