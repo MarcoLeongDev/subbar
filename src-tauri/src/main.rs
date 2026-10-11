@@ -2,7 +2,6 @@
 
 use chrono::Utc;
 use log::{error, info, warn};
-use regex::Regex;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -23,9 +22,10 @@ const KEYRING_SERVICE_OCG_WS: &str = "subbar-ocg-ws";
 const KEYRING_SERVICE_OCG_COOKIE: &str = "subbar-ocg-cookie";
 const KEYRING_USER: &str = "subbar";
 
-// OCG reads usage from the `agent-limits` CLI and has no in-app API key. When
-// the CLI cannot authenticate / has no usable credentials, the tray title
-// shows this clear status instead of a raw error marker.
+// OCG reads usage from the OpenCode console API in-process and has no in-app
+// API key. When the console rejects the session cookie / has no usable
+// credentials, the tray title shows this clear status instead of a raw error
+// marker.
 const OCG_NO_AUTH_TITLE: &str = "unauth";
 
 // SEC-6-18: widget dimensions — single source of truth shared with
@@ -182,10 +182,11 @@ fn get_api_key(endpoint: String, reveal: Option<bool>, state: tauri::State<AppSt
 
 #[tauri::command]
 fn set_api_key(key: String, endpoint: String, state: tauri::State<AppState>) {
-    // OCG has no API key — usage comes from the `agent-limits` CLI, which
-    // manages its own credentials. Never store/overwrite a key for it.
+    // OCG has no API key — usage comes from the OpenCode console API, which
+    // authenticates with the session cookie stored by `set_ocg_credentials`.
+    // Never store/overwrite an API key for it.
     if endpoint == "ocg" {
-        log::debug!("set_api_key: ocg endpoint uses agent-limits CLI, no key stored");
+        log::debug!("set_api_key: ocg endpoint uses the console session cookie, no key stored");
         return;
     }
     let key = key.trim();
@@ -539,11 +540,14 @@ async fn fetch_quota(
     fetch_and_update(&app).await
 }
 
-// OCG (OpenCode Go) usage is fetched in-process by our own HTTP client, exactly
-// like the Minimax pipeline — no external binary, no silent credential fallback.
-// Credentials come from AppState, which `set_ocg_credentials` keeps current when
-// the user saves them. If they are missing, this returns a clear error (mirroring
-// how a missing Minimax key returns an error) instead of falling back to anything.
+// OCG (OpenCode Go) usage is fetched in-process by our own HTTP client from the
+// OpenCode **console JSON API**, exactly like the Minimax pipeline — no
+// external binary, no silent credential fallback. The console migrated from a
+// server-rendered dashboard to an SPA at opencode.ai/console (changelog
+// v1.18.26), so the legacy HTML scrape is gone. Credentials come from
+// AppState, which `set_ocg_credentials` keeps current when the user saves
+// them. If they are missing, this returns a clear error (mirroring how a
+// missing Minimax key returns an error) instead of falling back to anything.
 async fn run_agent_limits(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
     let s = app.state::<AppState>();
     let ws = s
@@ -559,114 +563,119 @@ async fn run_agent_limits(app: &tauri::AppHandle) -> Result<serde_json::Value, S
     fetch_ocg_usage(&ws, &cookie).await
 }
 
-const OCG_DASHBOARD_URL_TEMPLATE: &str = "https://opencode.ai/workspace/{}/go";
-const OCG_USER_AGENT: &str =
-    "agent-limits/2026.7.2 (opencodego; https://github.com/f4ah6o/agent-usage)";
+const OCG_CONSOLE_ORGS_URL: &str = "https://opencode.ai/console/api/orgs";
+const OCG_CONSOLE_GO_STATUS_URL: &str = "https://opencode.ai/console/api/go/status";
+const OCG_USER_AGENT: &str = "SubBar (https://github.com/MarcoLeongDev/subbar)";
 const OCG_FETCH_TIMEOUT_SECS: u64 = 10;
 
-fn re_ocg_window_block() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(
-            r#"(?:\"(rolling|weekly|monthly)\"|(rolling|weekly|monthly)Usage)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?\{([^}]*)\}"#,
-        )
-        .unwrap()
-    })
-}
+// Session cookie names the console accepts. Which one a browser holds depends
+// on how the user signed in: `auth` / `__Host-auth` for the legacy app,
+// `__Host-console_session` for the console SPA. A bare pasted value is sent
+// under every name so any of those copies authenticates.
+const OCG_SESSION_COOKIE_NAMES: [&str; 3] = ["auth", "__Host-auth", "__Host-console_session"];
 
-fn re_ocg_usage_pct() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"\"?usagePercent\"?\s*:\s*(\d+(?:\.\d+)?)"#).unwrap())
-}
-
-fn re_ocg_reset_sec() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"\"?resetInSec\"?\s*:\s*(\d+)"#).unwrap())
-}
-
-fn ocg_window_key(name: &str) -> &'static str {
-    match name {
-        "rolling" => "five_hour",
-        "weekly" => "seven_day",
-        "monthly" => "monthly",
-        _ => "unknown",
+// Builds the Cookie header from the stored credential. A full `name=value; …`
+// header (the user pasted the whole devtools cookie value) is passed through
+// as-is; a bare value is sent under every accepted session cookie name.
+fn ocg_cookie_header(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.contains('=') {
+        return trimmed.to_string();
     }
+    OCG_SESSION_COOKIE_NAMES
+        .iter()
+        .map(|name| format!("{name}={trimmed}"))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
-// Fetches OpenCode Go usage for the given workspace using the session cookie,
-// replicating the working API call directly (verified against the real endpoint).
-// Returns JSON shaped like `{ providers: { opencodego: { limits: {...} } } }` so
-// `parse_ocg_bars` can consume it unchanged.
+// Extracts the workspace id from a bare id (`wrk_…` / `org_…`) or a pasted
+// dashboard URL (console `…/console/<id>/go` or the legacy `…/workspace/<id>/go`
+// form, with or without scheme). Anything else is returned trimmed so the API
+// can reject an explicit typo with a clear error.
+fn ocg_workspace_id(raw: &str) -> String {
+    const URL_PREFIXES: [&str; 8] = [
+        "https://opencode.ai/console/",
+        "http://opencode.ai/console/",
+        "https://opencode.ai/workspace/",
+        "http://opencode.ai/workspace/",
+        "opencode.ai/console/",
+        "opencode.ai/workspace/",
+        "/console/",
+        "/workspace/",
+    ];
+    let trimmed = raw.trim().trim_end_matches('/');
+    for prefix in URL_PREFIXES {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            let id = rest.split(['/', '?', '#']).next().unwrap_or("").trim();
+            if !id.is_empty() {
+                return id.to_string();
+            }
+        }
+    }
+    trimmed.to_string()
+}
+
+// Fetches OpenCode Go usage for the given workspace from the console API,
+// replicating the browser's console calls (verified against the live console).
+// Returns JSON shaped like `{ providers: { opencodego: { limits: {...} } } }`
+// so `parse_ocg_bars` can consume it unchanged.
 async fn fetch_ocg_usage(
     workspace_id: &str,
     auth_cookie: &str,
 ) -> Result<serde_json::Value, String> {
-    if workspace_id.trim().is_empty() || auth_cookie.trim().is_empty() {
+    let cookie = auth_cookie.trim();
+    if cookie.is_empty() {
         return Err(
-            "OpenCode Go credentials missing (workspace ID and auth cookie required)".into(),
+            "OpenCode Go session cookie missing — copy it from DevTools → Cookies → opencode.ai"
+                .into(),
         );
     }
 
-    let url = OCG_DASHBOARD_URL_TEMPLATE.replacen("{}", &workspace_id.trim(), 1);
-    // The workspace ID is a secret that ends up in the URL path. Build a
-    // redacted copy for any log/error message so it never leaks in logs.
-    let safe_url = url.replace(workspace_id.trim(), "[REDACTED]");
+    // The workspace id may be empty (auto-discovered from the account), a bare
+    // id, or a pasted dashboard URL.
+    let workspace = match ocg_workspace_id(workspace_id) {
+        ws if ws.is_empty() => ocg_discover_workspace_id(cookie).await?,
+        ws => ws,
+    };
 
     let resp = http_client()
-        .get(&url)
+        .get(OCG_CONSOLE_GO_STATUS_URL)
         .header("User-Agent", OCG_USER_AGENT)
-        .header("Cookie", format!("auth={}", auth_cookie.trim()))
-        .header("Accept", "text/html,application/xhtml+xml")
+        .header("Cookie", ocg_cookie_header(cookie))
+        .header("x-org-id", &workspace)
+        .header("Accept", "application/json")
         .timeout(Duration::from_secs(OCG_FETCH_TIMEOUT_SECS))
         .send()
         .await
-        .map_err(|e| format!("opencodego request failed: {e}"))?;
+        .map_err(|e| format!("OpenCode Go request failed: {e}"))?;
 
     let status = resp.status();
     if !status.is_success() {
+        // SEC: the workspace id is a secret (treated like the cookie). Redact
+        // it in every error message so it never leaks in logs or the UI.
         return match status.as_u16() {
             401 | 403 => Err(format!(
-                "HTTP {} from {safe_url} — OpenCode Go auth cookie rejected; re-enter it in settings",
-                status
+                "HTTP {status} — OpenCode Go session cookie rejected; copy a fresh one from DevTools → Cookies → opencode.ai"
             )),
-            429 | 500..=599 => Err(format!("HTTP {status} from {safe_url} (transient)")),
-            _ => Err(format!("HTTP {status} from {safe_url}")),
+            404 => Err(format!(
+                "HTTP 404 — workspace {} not found in the OpenCode console; check the workspace id",
+                redact_api_key(&workspace)
+            )),
+            400 => Err(format!("HTTP {status} — OpenCode Go rejected the request")),
+            429 | 500..=599 => Err(format!("HTTP {status} (transient)")),
+            _ => Err(format!("HTTP {status} from the OpenCode console API")),
         };
     }
 
     let body = resp
         .text()
         .await
-        .map_err(|e| format!("opencodego: reading response: {e}"))?;
+        .map_err(|e| format!("OpenCode Go: reading response: {e}"))?;
+    let data: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("OpenCode Go: invalid API response: {e}"))?;
 
-    let now = Utc::now();
-    let mut limits = serde_json::Map::new();
-    for cap in re_ocg_window_block().captures_iter(&body) {
-        let window_name = cap.get(1).or_else(|| cap.get(2)).unwrap().as_str();
-        let block = cap.get(3).unwrap().as_str();
-        let used_pct = match re_ocg_usage_pct().captures(block) {
-            Some(m) => m[1].parse::<f64>().unwrap_or(0.0),
-            None => continue,
-        };
-        let reset_sec = match re_ocg_reset_sec().captures(block) {
-            Some(m) => m[1].parse::<i64>().unwrap_or(0).max(0),
-            None => continue,
-        };
-        let key = ocg_window_key(window_name);
-        let resets_at = now + chrono::Duration::seconds(reset_sec);
-        limits.insert(
-            key.to_string(),
-            serde_json::json!({
-                "used_percent": used_pct,
-                "resets_at": resets_at.to_rfc3339(),
-            }),
-        );
-    }
-
-    if limits.is_empty() {
-        return Err("opencodego: no usage window data found in dashboard response".into());
-    }
-
+    let limits = ocg_limits_from_console(&data)?;
     Ok(serde_json::json!({
         "providers": {
             "opencodego": {
@@ -676,17 +685,117 @@ async fn fetch_ocg_usage(
     }))
 }
 
+// Resolves the workspace id from the console account when the user has not
+// entered one (the console only surfaces the id inside its URLs, so
+// auto-discovery keeps setup down to the single cookie field).
+async fn ocg_discover_workspace_id(cookie: &str) -> Result<String, String> {
+    let resp = http_client()
+        .get(OCG_CONSOLE_ORGS_URL)
+        .header("User-Agent", OCG_USER_AGENT)
+        .header("Cookie", ocg_cookie_header(cookie))
+        .header("Accept", "application/json")
+        .timeout(Duration::from_secs(OCG_FETCH_TIMEOUT_SECS))
+        .send()
+        .await
+        .map_err(|e| format!("OpenCode Go request failed: {e}"))?;
+    match resp.status().as_u16() {
+        401 | 403 => {
+            return Err(
+                "HTTP 401 — OpenCode Go session cookie rejected; copy a fresh one from DevTools → Cookies → opencode.ai"
+                    .into(),
+            );
+        }
+        s if !(200..300).contains(&s) => {
+            return Err(format!("HTTP {s} from the OpenCode console API"));
+        }
+        _ => {}
+    }
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("OpenCode Go: reading response: {e}"))?;
+    let orgs: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("OpenCode Go: invalid API response: {e}"))?;
+    orgs.as_array()
+        .and_then(|list| list.iter().find_map(|o| o.get("id").and_then(|v| v.as_str())))
+        .map(|id| id.to_string())
+        .ok_or_else(|| "OpenCode Go: no workspace found for this account".into())
+}
+
+// Maps the console `go/status` payload onto SubBar's internal limit shape.
+// Meter amounts are micro-cent strings (`"300000000"`) or numbers; the month
+// meter carries no `resetsAt`, so the billing period end (`access.endsAt`)
+// stands in for its reset time.
+fn ocg_limits_from_console(
+    v: &serde_json::Value,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let access = v
+        .get("access")
+        .filter(|a| a.is_object())
+        .ok_or_else(|| "OpenCode Go: no active subscription on this workspace".to_string())?;
+    let meters = access
+        .get("meters")
+        .and_then(|m| m.as_object())
+        .ok_or_else(|| "OpenCode Go: no usage meters on this workspace".to_string())?;
+    let period_end = access.get("endsAt").and_then(|e| e.as_str()).unwrap_or("");
+    let now = Utc::now();
+
+    let mut limits = serde_json::Map::new();
+    for (meter_name, key) in [
+        ("fiveHour", "five_hour"),
+        ("week", "seven_day"),
+        ("month", "monthly"),
+    ] {
+        let meter = meters
+            .get(meter_name)
+            .and_then(|m| m.as_object())
+            .ok_or_else(|| format!("OpenCode Go: missing {meter_name} meter"))?;
+        let used = ocg_micro_cents(meter.get("usedMicroCents"));
+        let limit = ocg_micro_cents(meter.get("limitMicroCents"));
+        let used_pct = if limit > 0.0 {
+            (used / limit) * 100.0
+        } else {
+            0.0
+        };
+        let resets_at = meter
+            .get("resetsAt")
+            .and_then(|r| r.as_str())
+            .filter(|s| !s.is_empty())
+            .or(if meter_name == "month" && !period_end.is_empty() {
+                Some(period_end)
+            } else {
+                None
+            })
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| now.to_rfc3339());
+        limits.insert(
+            key.to_string(),
+            serde_json::json!({ "used_percent": used_pct, "resets_at": resets_at }),
+        );
+    }
+    Ok(limits)
+}
+
+// Console amounts arrive as micro-cent strings (or numbers); anything else is 0.
+fn ocg_micro_cents(v: Option<&serde_json::Value>) -> f64 {
+    v.and_then(|x| {
+        x.as_f64()
+            .or_else(|| x.as_str().and_then(|s| s.parse::<f64>().ok()))
+    })
+    .unwrap_or(0.0)
+}
+
 fn parse_ocg_bars(v: &serde_json::Value) -> Result<Vec<serde_json::Value>, String> {
     let limits = v
         .get("providers")
         .and_then(|p| p.get("opencodego"))
         .and_then(|o| o.get("limits"))
-        .ok_or_else(|| "agent-limits: missing providers.opencodego.limits".to_string())?;
+        .ok_or_else(|| "OpenCode Go: missing providers.opencodego.limits".to_string())?;
     let mut bars = Vec::new();
     for (id, key) in [("5h", "five_hour"), ("week", "seven_day"), ("month", "monthly")] {
         let entry = limits
             .get(key)
-            .ok_or_else(|| format!("agent-limits: missing limits.{}", key))?;
+            .ok_or_else(|| format!("OpenCode Go: missing limits.{}", key))?;
         let used = entry.get("used_percent").and_then(|x| x.as_f64()).unwrap_or(0.0);
         let reset = entry
             .get("resets_at")
@@ -1145,27 +1254,32 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn fetch_ocg_usage_no_creds_is_clear_error() {
-        let res = fetch_ocg_usage("", "").await;
-        let err = res.expect_err("empty creds must error, never fetch");
+    async fn fetch_ocg_usage_no_cookie_is_clear_error() {
+        let res = fetch_ocg_usage("wrk_TEST0000000000000000000000", "").await;
+        let err = res.expect_err("empty cookie must error, never fetch");
         assert!(
-            err.contains("credentials missing"),
+            err.contains("session cookie missing"),
             "unexpected error: {err}"
         );
     }
 
     #[tokio::test]
-    async fn fetch_ocg_usage_blank_space_creds_is_clear_error() {
+    async fn fetch_ocg_usage_blank_space_cookie_is_clear_error() {
+        // A whitespace-only cookie must error before any network call, even
+        // though an empty workspace id would otherwise trigger discovery.
         let res = fetch_ocg_usage("   ", "  ").await;
-        let err = res.expect_err("whitespace creds must error");
-        assert!(err.contains("credentials missing"), "unexpected error: {err}");
+        let err = res.expect_err("whitespace cookie must error");
+        assert!(
+            err.contains("session cookie missing"),
+            "unexpected error: {err}"
+        );
     }
 
     #[tokio::test]
     async fn fetch_ocg_usage_wrong_creds_errors() {
-        // Bogus cookie against a real-looking workspace: the dashboard returns
-        // either a login page (no windows -> error) or an auth status; in all
-        // cases the call must surface an Err, never fake usage data.
+        // Bogus cookie against a real-looking workspace: the console API
+        // answers 401/404; in all cases the call must surface an Err, never
+        // fake usage data.
         let res = fetch_ocg_usage(
             "wrk_TEST0000000000000000000000",
             "Fe26.2**definitely-invalid-session-cookie",
@@ -1199,6 +1313,127 @@ mod tests {
             let reset = limits[key].get("resets_at").and_then(|x| x.as_str());
             assert!(reset.is_some() && !reset.unwrap().is_empty(), "{key} resets_at");
         }
+    }
+
+    #[test]
+    fn ocg_cookie_header_bare_value_sent_under_every_session_name() {
+        // One pasted value must authenticate regardless of which session
+        // cookie name the user's browser actually holds.
+        assert_eq!(
+            ocg_cookie_header("abc123"),
+            "auth=abc123; __Host-auth=abc123; __Host-console_session=abc123"
+        );
+    }
+
+    #[test]
+    fn ocg_cookie_header_full_header_passes_through() {
+        // A pasted `name=value` header is forwarded verbatim so a user who
+        // copies several cookies keeps them all.
+        assert_eq!(
+            ocg_cookie_header("auth=abc; other=xyz"),
+            "auth=abc; other=xyz"
+        );
+    }
+
+    #[test]
+    fn ocg_workspace_id_accepts_bare_id_and_pasted_urls() {
+        let id = "wrk_01KYSGBE8P7RYN8SP1YBDCZQHY";
+        assert_eq!(ocg_workspace_id(id), id);
+        assert_eq!(
+            ocg_workspace_id(&format!("https://opencode.ai/console/{id}/go")),
+            id
+        );
+        assert_eq!(
+            ocg_workspace_id(&format!("https://opencode.ai/workspace/{id}/go")),
+            id
+        );
+        assert_eq!(ocg_workspace_id(&format!("opencode.ai/console/{id}/")), id);
+        assert_eq!(ocg_workspace_id(&format!("  {id}  ")), id);
+        // A typo is passed through untouched so the API can reject it clearly.
+        assert_eq!(ocg_workspace_id("not-a-workspace"), "not-a-workspace");
+    }
+
+    #[test]
+    fn ocg_limits_from_console_maps_meters_to_windows() {
+        // Mirrors the live console `go/status` payload: micro-cent strings,
+        // month meter without `resetsAt` (billing period end stands in).
+        let v = serde_json::json!({
+            "access": {
+                "startsAt": "2026-09-19T00:00:00.000Z",
+                "endsAt": "2026-10-19T00:00:00.000Z",
+                "meters": {
+                    "fiveHour": {
+                        "startsAt": "2026-09-19T23:00:00.000Z",
+                        "resetsAt": "2026-09-20T03:00:00.000Z",
+                        "limitMicroCents": "1200000000",
+                        "usedMicroCents": "300000000"
+                    },
+                    "week": {
+                        "startsAt": "2026-09-14T00:00:00.000Z",
+                        "resetsAt": "2026-09-21T00:00:00.000Z",
+                        "limitMicroCents": "3000000000",
+                        "usedMicroCents": "1200000000"
+                    },
+                    "month": {
+                        "limitMicroCents": "6000000000",
+                        "usedMicroCents": "600000000"
+                    }
+                }
+            }
+        });
+        let limits = ocg_limits_from_console(&v).expect("limits");
+        let pct = |k: &str| limits[k].get("used_percent").and_then(|x| x.as_f64()).unwrap();
+        assert!((pct("five_hour") - 25.0).abs() < 1e-9);
+        assert!((pct("seven_day") - 40.0).abs() < 1e-9);
+        assert!((pct("monthly") - 10.0).abs() < 1e-9);
+        assert_eq!(
+            limits["monthly"].get("resets_at").and_then(|x| x.as_str()),
+            Some("2026-10-19T00:00:00.000Z"),
+            "month meter falls back to the billing period end"
+        );
+        assert_eq!(
+            limits["five_hour"].get("resets_at").and_then(|x| x.as_str()),
+            Some("2026-09-20T03:00:00.000Z")
+        );
+        // The mapped shape must feed `parse_ocg_bars` unchanged.
+        let wrapped = serde_json::json!({ "providers": { "opencodego": { "limits": limits } } });
+        assert_eq!(parse_ocg_bars(&wrapped).expect("bars").len(), 3);
+    }
+
+    #[test]
+    fn ocg_limits_from_console_numeric_amounts_and_zero_limit() {
+        let v = serde_json::json!({
+            "access": {
+                "endsAt": "2026-10-19T00:00:00.000Z",
+                "meters": {
+                    "fiveHour": { "limitMicroCents": 0, "usedMicroCents": 0 },
+                    "week": { "limitMicroCents": 100, "usedMicroCents": 25 },
+                    "month": { "limitMicroCents": 100, "usedMicroCents": 50 }
+                }
+            }
+        });
+        let limits = ocg_limits_from_console(&v).expect("limits");
+        let pct = |k: &str| limits[k].get("used_percent").and_then(|x| x.as_f64()).unwrap();
+        assert_eq!(pct("five_hour"), 0.0, "zero limit must not divide by zero");
+        assert_eq!(pct("seven_day"), 25.0);
+        assert_eq!(pct("monthly"), 50.0);
+    }
+
+    #[test]
+    fn ocg_limits_from_console_rejects_missing_subscription() {
+        let no_access = serde_json::json!({ "access": null });
+        let err = ocg_limits_from_console(&no_access).expect_err("must error");
+        assert!(err.contains("no active subscription"), "unexpected error: {err}");
+
+        let no_meters = serde_json::json!({ "access": { "endsAt": "x" } });
+        let err = ocg_limits_from_console(&no_meters).expect_err("must error");
+        assert!(err.contains("no usage meters"), "unexpected error: {err}");
+
+        let missing_meter = serde_json::json!({
+            "access": { "endsAt": "x", "meters": { "fiveHour": {}, "week": {} } }
+        });
+        let err = ocg_limits_from_console(&missing_meter).expect_err("must error");
+        assert!(err.contains("missing month meter"), "unexpected error: {err}");
     }
 
     #[test]
@@ -1279,8 +1514,9 @@ mod tests {
         assert!(!is_ocg_endpoint("io"));
     }
 
-    // The vendored provider returns the same JSON shape the UI parser expects.
-    // This proves the in-process fetch integrates with `parse_ocg_bars`.
+    // The console `go/status` mapping produces the same JSON shape the UI
+    // parser expects. This proves the in-process fetch integrates with
+    // `parse_ocg_bars`.
     #[test]
     fn parse_ocg_bars_reads_vendored_shape() {
         let v = serde_json::json!({

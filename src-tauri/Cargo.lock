@@ -3379,14 +3379,13 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "subbar"
-version = "1.0.37"
+version = "1.0.38"
 dependencies = [
  "chrono",
  "env_logger",
  "keyring",
  "log",
  "objc",
- "regex",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

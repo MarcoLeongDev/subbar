@@ -41,23 +41,23 @@ var i18n = {
   en: {title:'SubBar',unit:'s',aes:'Stored in OS keychain',
        errKey:'API key needed\nclick',
        errKeyPrefix:'API key should start with sk-\nclick',
-        pill5h:'5h',pillWeek:'Week',pillMonth:'Month',ocgHint:'Enter your OpenCode Go workspace ID & auth cookie (from opencode.ai)'},
+        pill5h:'5h',pillWeek:'Week',pillMonth:'Month',ocgHint:'Enter your OpenCode Go workspace ID & console session cookie (from opencode.ai/console)'},
   'zh-tw': {title:'SubBar',unit:'秒',aes:'儲存於 OS 鑰匙圈',
         errKey:'需要 API 金鑰\n點擊',
         errKeyPrefix:'API 金鑰應以 sk- 開頭\n點擊',
-        pill5h:'5小時',pillWeek:'週',pillMonth:'月',ocgHint:'請輸入 OpenCode Go 工作區 ID 與 auth cookie（來自 opencode.ai）'},
+        pill5h:'5小時',pillWeek:'週',pillMonth:'月',ocgHint:'請輸入 OpenCode Go 工作區 ID 與 console session cookie（來自 opencode.ai/console）'},
   zh: {title:'SubBar',unit:'秒',aes:'存储于 OS 钥匙串',
         errKey:'需要 API 密钥\n点击',
         errKeyPrefix:'API 密钥应以 sk- 开头\n点击',
-        pill5h:'5小时',pillWeek:'周',pillMonth:'月',ocgHint:'请输入 OpenCode Go 工作区 ID 与 auth cookie（来自 opencode.ai）'},
+        pill5h:'5小时',pillWeek:'周',pillMonth:'月',ocgHint:'请输入 OpenCode Go 工作区 ID 与 console session cookie（来自 opencode.ai/console）'},
   ja: {title:'SubBar',unit:'秒',aes:'OSキーチェーンに保存',
         errKey:'APIキーが必要です\nクリック',
         errKeyPrefix:'APIキーは sk- で始める必要があります\nクリック',
-        pill5h:'5時間',pillWeek:'週間',pillMonth:'月',ocgHint:'OpenCode Go の workspace ID と auth cookie を入力（opencode.ai から）'},
+        pill5h:'5時間',pillWeek:'週間',pillMonth:'月',ocgHint:'OpenCode Go の workspace ID と console session cookie を入力（opencode.ai/console から）'},
   es: {title:'SubBar',unit:'s',aes:'Almacenado en llavero del SO',
         errKey:'Se necesita clave API\nhaga clic en',
         errKeyPrefix:'La clave API debe comenzar con sk-\nhaga clic en',
-        pill5h:'5h',pillWeek:'Semana',pillMonth:'Mes',ocgHint:'Introduce el ID de workspace y auth cookie de OpenCode Go (de opencode.ai)'}
+        pill5h:'5h',pillWeek:'Semana',pillMonth:'Mes',ocgHint:'Introduce el ID de workspace y la cookie de sesión de la consola de OpenCode Go (de opencode.ai/console)'}
 };
 function t(k) { return (i18n[lang] || i18n.en)[k] || k; }
 function applyLang() {
@@ -515,7 +515,7 @@ document.addEventListener('click', function(e) {
 function restartTimer() {}
 
 async function fetchUsage() {
-  // OCG endpoint reads OpenCode Go usage from the `agent-limits` CLI and has
+  // OCG endpoint reads OpenCode Go usage from the OpenCode console API and has
   // no API key — bypass the key check and render 3 bars (5h / week / month).
   if (endpoint === 'ocg') {
     // Persist whatever is in the fields (if anything) BEFORE fetching so the
