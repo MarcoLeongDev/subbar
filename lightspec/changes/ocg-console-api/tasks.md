@@ -9,11 +9,11 @@
 - [x] 7. Bump version 1.0.37 → 1.0.38 (Cargo.toml, tauri.conf.json, Info.plist, README, index.html)
 - [x] 8. Commit e79c090
 - [x] 9. Build release, deploy to /Applications, launch, verify version + new code path live (v1.0.38 live, console 401 path verified live)
-- [x] 10. Name __Host-console_session in error messages (v1.0.39 committed+deployed, verified live: legacy redirects to /console/login, console API ignores auth cookie)
-- [ ] 11. Verify live: only auth cookie available -> dig for a working invocation (Zen /zen/go/v1/usage + Bearer Go API key WORKS live 2026-10-11)
-- [ ] 12. Implement Go-API-key flow with auto-dispatch (sk-… -> Zen API; else -> console cookie flow)
-- [ ] 13. Unit tests for Zen parsing + dispatch; live-gated API-key test via OCG_TEST_APIKEY
-- [ ] 14. README + in-app hints for the Go API key
-- [ ] 15. cargo test green, bump 1.0.39 -> 1.0.40, commit, rebuild, redeploy, verify live panel
-- [ ] 16. Screenshots to /tmp
-- [ ] 17. Clean-subagent regression review of this round's diff
+- [x] 10. Name __Host-console_session in error messages (v1.0.39, verified live: legacy redirects to /console/login, console API ignores auth cookie)
+- [x] 11. Verify live: auth cookie cannot drive the console API (401 everywhere) -> Zen /zen/go/v1/usage + Bearer Go API key WORKS live 2026-10-11 (rolling 4 / weekly 48 / monthly 24)
+- [x] 12. Implement Go-API-key flow with auto-dispatch + bump 1.0.39 -> 1.0.40 + commit bc6fce4
+- [x] 13. Unit tests for Zen parsing + dispatch (28 pass); live-gated API-key test via OCG_TEST_APIKEY passes through app code
+- [x] 14. README + in-app hints lead with the Go API key
+- [x] 15. cargo test green, bump 1.0.40 -> 1.0.41, commit 4942134, rebuild, redeploy /Applications, v1.0.41 running
+- [x] 16. Screenshots to /tmp (menubar + settings + error view)
+- [x] 17. Clean-subagent regression review: PASS, no regressions; 1 UX wart fixed in v1.0.41
