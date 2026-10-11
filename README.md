@@ -4,7 +4,7 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
-![Version](https://img.shields.io/badge/version-v1.0.41-blue)
+![Version](https://img.shields.io/badge/version-v1.0.42-blue)
 
 A tiny macOS menu-bar app that watches your subscription / quota usage for
 **Minimax** (`.com` / `.io`) and **OpenCode Go**. One click. One glance. Done.
